@@ -8,6 +8,10 @@ pub fn complement_base(base: u8) -> u8 {
     }
 }
 
+pub fn reverse_complement(seq: &[u8]) -> Vec<u8> {
+    seq.into_iter().rev().map(|&b| complement_base(b)).collect()
+}
+
 pub fn atcg_only(kmer: &[u8]) -> bool {
     // Will return true if the kmer contains only A, T, C, or G
     for base in kmer.iter() {

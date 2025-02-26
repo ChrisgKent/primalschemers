@@ -1,7 +1,7 @@
 use crate::kmer::{FKmer, RKmer};
 use crate::seqfuncs::{
     atcg_only, complement_base, contains_ambs, expand_amb_base, expand_amb_sequence, gc_content,
-    max_homopolymer,
+    max_homopolymer, reverse_complement,
 };
 use crate::tm;
 
@@ -27,7 +27,7 @@ pub enum DigestError {
     MaxWalk,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Eq, PartialEq, Hash, Debug, Clone)]
 pub enum ThermoResult {
     Pass,
     HighGC,
@@ -38,7 +38,7 @@ pub enum ThermoResult {
     LowTm,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Eq, PartialEq, Hash, Debug, Clone)]
 
 pub enum IndexResult {
     ThermoResult(ThermoResult),
@@ -179,10 +179,10 @@ pub fn walk_right(
 
     let new_base = seq[r_index];
 
-    // If base is gap keep walking
-    if new_base == b'-' {
-        let new_results = walk_right(seq, l_index, r_index + 1, kmer);
-        return new_results;
+    match new_base {
+        b' ' => return vec![Err(DigestError::WalkedOutRight)],
+        b'-' => return walk_right(seq, l_index, r_index + 1, kmer),
+        _ => (),
     }
 
     // if base is ambiguous, expand it
@@ -362,12 +362,11 @@ pub fn walk_left(
 
     let new_base = seq[l_index - 1];
 
-    // TODO - Check if new_base is a valid base
-
     // If base is gap keep walking
-    if new_base == b'-' {
-        let new_results = walk_left(seq, l_index - 1, r_index, kmer);
-        return new_results;
+    match new_base {
+        b'-' => return walk_left(seq, l_index - 1, r_index, kmer),
+        b' ' => return vec![Err(DigestError::WalkedOutLeft)],
+        _ => (),
     }
 
     // if base is ambiguous, expand it
@@ -386,7 +385,7 @@ pub fn walk_left(
     kmer_clones.push(kmer);
 
     for (base, mut kmer_c) in new_bases.iter().zip(kmer_clones) {
-        kmer_c.add_base(*base);
+        kmer_c.add_base(complement_base(*base));
         let new_results = walk_left(seq, l_index - 1, r_index, kmer_c);
         results.extend(new_results);
     }
@@ -419,7 +418,7 @@ pub fn digest_f_to_count(
         // Create the kmer slice
         let mut kmer: Vec<u8> = Vec::with_capacity(MAX_PRIMER_LEN);
         kmer.extend_from_slice(&seq[lhs..index]);
-        kmer.reverse(); // Reverse is used as push is .O(1) and .insert(0) is O(n)
+        kmer = reverse_complement(&kmer); // Reverse is used as push is .O(1) and .insert(0) is O(n)
 
         // Remove gaps from the kmer
         kmer = kmer
@@ -467,7 +466,7 @@ pub fn digest_f_to_count(
     for (k, v) in kmer_count.into_iter() {
         match k {
             Ok(mut kmer) => {
-                kmer.reverse();
+                kmer = reverse_complement(&kmer);
                 un_reversed.insert(Ok(kmer), v);
             }
             Err(dr) => {
@@ -562,6 +561,30 @@ mod tests {
     }
 
     #[test]
+    fn test_digest_r_to_count_ambs() {
+        let seqs = vec!["ATTAAAGGTTTATACCTTCCCAGGTAACAAACCAACCAACTTTRCGATCTCTTGTAGATCT".as_bytes()];
+
+        let digested = digest_r_to_count(&seqs, 30);
+        // Check num of seqs
+        assert_eq!(digested.len(), 2);
+        // Check count of ambiguous base
+        for (_key, count) in digested.iter() {
+            assert_eq!(count, &0.5, "Count: {}", count);
+        }
+
+        // Check sequence
+        let seqs =
+            vec!["ATTAAAGGTTTATACCTTCCCAGGTAACAAACCAACCAACTTTRCYGATCTCTTGTAGATCT".as_bytes()];
+        let digested = digest_r_to_count(&seqs, 30);
+        // Check num of seqs
+        assert_eq!(digested.len(), 4);
+        // Check count of ambiguous base
+        for (_key, count) in digested.iter() {
+            assert_eq!(count, &0.25, "Count: {}", count);
+        }
+    }
+
+    #[test]
     fn test_digest_f_to_count() {
         let seqs = vec!["ATTAAAGGTTTATACCTTCCCAGGTAACAAACCAACCAACTTTCGATCTCTTGTAGATCT".as_bytes()];
 
@@ -571,7 +594,7 @@ mod tests {
 
         // Check sequence
         let exp_seq: Result<Vec<u8>, DigestError> =
-            Ok("TCCCAGGTAACAAACCAACCAAC".as_bytes().to_vec());
+            Ok("TTCCCAGGTAACAAACCAACCAAC".as_bytes().to_vec());
 
         assert_eq!(digested.contains_key(&exp_seq), true);
         // Check count
@@ -588,7 +611,7 @@ mod tests {
         assert_eq!(digested.len(), 1);
 
         // Check sequence
-        let exp_seq = Ok("TGTCCAATGGTGCAAAAGGTATAATCATTAAT".as_bytes().to_vec());
+        let exp_seq = Ok("GTCCAATGGTGCAAAAGGTATAATCATTAAT".as_bytes().to_vec());
 
         assert_eq!(digested.contains_key(&exp_seq), true);
         // Check count
@@ -604,6 +627,29 @@ mod tests {
         assert_eq!(digested.len(), 1);
         // Check sequence
         assert_eq!(digested.contains_key(&Err(DigestError::GapOnSetBase)), true);
+    }
+
+    #[test]
+    fn test_digest_f_to_count_ambs() {
+        let seqs = vec!["ATTAAAGGTTTATACCTTCCCAGGTAACAAACCAACCAARTTTCGATCTCTTGTAGATCT".as_bytes()];
+
+        let digested = digest_f_to_count(&seqs, 40);
+        // Check num of seqs
+        assert_eq!(digested.len(), 2);
+        // Check count of ambiguous base
+        for (_key, count) in digested.iter() {
+            assert_eq!(count, &0.5, "Count: {}", count);
+        }
+
+        // Check sequence
+        let seqs = vec!["ATTAAAGGTTTATACCTTCCCAGGTAACAAACCAACCRARTTTCGATCTCTTGTAGATCT".as_bytes()];
+        let digested = digest_f_to_count(&seqs, 40);
+        // Check num of seqs
+        assert_eq!(digested.len(), 4);
+        // Check count of ambiguous base
+        for (_key, count) in digested.iter() {
+            assert_eq!(count, &0.25, "Count: {}", count);
+        }
     }
 
     #[test]
