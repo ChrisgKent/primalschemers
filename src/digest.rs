@@ -7,7 +7,7 @@ use crate::tm;
 
 use std::collections::HashMap;
 
-use indicatif::{ParallelProgressIterator, ProgressStyle};
+use indicatif::{ParallelProgressIterator, ProgressBar, ProgressStyle};
 use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 
 static MIN_PRIMER_LEN: usize = 19;
@@ -244,6 +244,14 @@ pub fn digest_r_to_count(
             .filter(|b| *b != b'-' && *b != b' ')
             .collect();
 
+        if kmer.len() == 0 {
+            let c = kmer_count
+                .entry(Err(DigestError::NoValidPrimer))
+                .or_insert(0.0);
+            *c += 1.0;
+            continue;
+        }
+
         if atcg_only(&kmer) {
             // No ambiguous bases
             let results = walk_right(seq, index, rhs, tm::Oligo::new(kmer));
@@ -326,12 +334,17 @@ pub fn digest_r_primer(seq_array: &Vec<&[u8]>) -> Vec<Result<RKmer, IndexResult>
         }
     }
 
-    let progress_bar =
-        ProgressStyle::with_template("[{elapsed}] {wide_bar:40.cyan/blue} {pos:>7}/{len:7} {eta}")
-            .unwrap();
+    let progress_bar = ProgressBar::new(indexes.len() as u64);
+    progress_bar.set_message("rprimer digestion");
+    progress_bar.set_style(
+        ProgressStyle::default_bar()
+            .template("{msg} [{elapsed}] {wide_bar:.cyan/blue} {pos:>7}/{len:7} {eta}")
+            .unwrap(),
+    );
+
     let results: Vec<Result<RKmer, IndexResult>> = indexes
         .par_iter()
-        .progress_with_style(progress_bar)
+        .progress_with(progress_bar)
         .map(|i| digest_r_at_index(&seq_array, *i))
         .collect();
 
@@ -426,6 +439,14 @@ pub fn digest_f_to_count(
             .filter(|b| *b != b'-' && *b != b' ')
             .collect();
 
+        if kmer.len() == 0 {
+            let c = kmer_count
+                .entry(Err(DigestError::NoValidPrimer))
+                .or_insert(0.0);
+            *c += 1.0;
+            continue;
+        }
+
         if atcg_only(&kmer) {
             // No ambiguous bases
             let results = walk_left(seq, lhs, index, tm::Oligo::new(kmer));
@@ -515,13 +536,17 @@ pub fn digest_f_primer(seq_array: &Vec<&[u8]>) -> Vec<Result<FKmer, IndexResult>
         }
     }
 
-    let progress_bar =
-        ProgressStyle::with_template("[{elapsed}] {wide_bar:40.cyan/blue} {pos:>7}/{len:7} {eta}")
-            .unwrap();
+    let progress_bar = ProgressBar::new(indexes.len() as u64);
+    progress_bar.set_message("fprimer digestion");
+    progress_bar.set_style(
+        ProgressStyle::default_bar()
+            .template("{msg} [{elapsed}] {wide_bar:.cyan/blue} {pos:>7}/{len:7} {eta}")
+            .unwrap(),
+    );
 
     let results: Vec<Result<FKmer, IndexResult>> = indexes
         .par_iter()
-        .progress_with_style(progress_bar)
+        .progress_with(progress_bar)
         .map(|i| digest_f_at_index(&seq_array, *i))
         .collect();
 
