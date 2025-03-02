@@ -14,6 +14,7 @@ pub mod seqio;
 pub mod tm;
 
 #[pyfunction]
+#[pyo3(signature = (msa_path, ncores, remap, findexes=None, rindexes=None, primer_len_min=None, primer_len_max=None, primer_gc_max=None, primer_gc_min=None, primer_tm_max=None, primer_tm_min=None, max_walk=None, max_homopolymers=None, min_freq=None))]
 fn digest_seq(
     msa_path: &str,
     ncores: usize,
@@ -200,12 +201,6 @@ fn do_pool_interact(seqs1: Vec<Vec<u8>>, seqs2: Vec<Vec<u8>>, t: f64) -> bool {
         }
     }
     false
-}
-
-/// A Python module implemented in Rust.
-#[pyfunction]
-fn create_mapping_array(seq: &[u8]) -> PyResult<Vec<Option<usize>>> {
-    Ok(mapping::create_mapping_array(seq))
 }
 
 #[pymodule]

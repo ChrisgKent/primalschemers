@@ -1,10 +1,7 @@
-use core::hash;
-use indicatif::{style, ParallelProgressIterator, ProgressStyle};
+use indicatif::{ParallelProgressIterator, ProgressStyle};
 use pyo3::prelude::*;
 use rayon::iter::{IntoParallelIterator, IntoParallelRefIterator, ParallelIterator};
-use std::{hash::Hash, ops::Index, str::from_utf8};
-
-use crate::primaldimer;
+use std::str::from_utf8;
 
 #[derive(Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
 #[pyclass]

@@ -1,5 +1,5 @@
 mod scores;
-use scores::{MATCH_ARRAY, NN_SCORES, SEQ1_OVERHANG_ARRAY, SEQ2_OVERHANG_ARRAY};
+use scores::{nn_dg_scores, MATCH_ARRAY, NN_SCORES, SEQ1_OVERHANG_ARRAY, SEQ2_OVERHANG_ARRAY};
 
 use itertools::Itertools;
 
@@ -59,17 +59,13 @@ pub fn decode_base(encoded_base: &[usize]) -> String {
     return decoded_base;
 }
 
-fn calc_dangling_ends_stabilty(
-    seq1: &[usize],
-    seq2: &[usize],
-    mapping: &Vec<(usize, usize)>,
-) -> f64 {
+fn calc_dangling_ends_stability(seq1: &[u8], seq2: &[u8], mapping: &Vec<(usize, usize)>) -> f64 {
     let mut dg_score = 0.;
 
     // Look for overhang on the right side
     let (seq2_i, seq1_i) = mapping[mapping.len() - 1];
 
-    match SEQ2_OVERHANG_ARRAY[seq1[seq1_i]][seq2[seq2_i]][seq2[seq2_i + 1]] {
+    match scores::seq2_overhang_dg(&seq1[seq1_i], &seq2[seq2_i], &seq2[seq2_i + 1]) {
         Some(score) => dg_score += score,
         None => dg_score += BONUS_ARRAY[2],
     }
@@ -78,12 +74,12 @@ fn calc_dangling_ends_stabilty(
     let (seq2_i, seq1_i) = mapping[0];
 
     if seq1_i > 0 {
-        match SEQ1_OVERHANG_ARRAY[seq1[seq1_i]][seq2[seq2_i]][seq1[seq1_i - 1]] {
+        match scores::seq1_overhang_dg(&seq1[seq1_i], &seq2[seq2_i], &seq1[seq1_i - 1]) {
             Some(score) => dg_score += score,
             None => dg_score += BONUS_ARRAY[1],
         }
     } else if seq2_i > 0 {
-        match SEQ2_OVERHANG_ARRAY[seq1[seq1_i]][seq2[seq2_i]][seq2[seq2_i - 1]] {
+        match scores::seq2_overhang_dg(&seq1[seq1_i], &seq2[seq2_i], &seq2[seq2_i - 1]) {
             Some(score) => dg_score += score,
             None => dg_score += BONUS_ARRAY[1],
         }
@@ -92,18 +88,18 @@ fn calc_dangling_ends_stabilty(
     return dg_score;
 }
 
-fn calc_nn_thermo(seq1: &[usize], seq2: &[usize], mapping: &Vec<(usize, usize)>) -> f64 {
+fn calc_nn_thermo(seq1: &[u8], seq2: &[u8], mapping: &Vec<(usize, usize)>) -> f64 {
     let mut dg_score: f64 = 0.;
     for (seq2_i, seq1_i) in mapping.iter() {
-        match NN_SCORES[seq1[*seq1_i]][seq1[*seq1_i + 1]][seq2[*seq2_i]][seq2[*seq2_i + 1]] {
-            Some(score) => dg_score += score,   // If match or single mismatch
-            None => dg_score += BONUS_ARRAY[0], // If Double mismatch
+        match nn_dg_scores(&seq1[*seq1_i..*seq1_i + 2], &seq2[*seq2_i..*seq2_i + 2]) {
+            Some(score) => dg_score += score,
+            None => dg_score += BONUS_ARRAY[6],
         }
     }
     return dg_score;
 }
 
-fn calc_extention(seq1: &[usize], match_bool: &Vec<bool>) -> Option<f64> {
+fn calc_extension(seq1: &[u8], match_bool: &Vec<bool>) -> Option<f64> {
     // Guard for no matches in final two 3' bases
     if !match_bool[match_bool.len() - 2..].iter().any(|f| *f) {
         return None;
@@ -126,8 +122,8 @@ fn calc_extention(seq1: &[usize], match_bool: &Vec<bool>) -> Option<f64> {
         if **match_bool {
             // Add match score
             match seq1[seq1_index] {
-                1 | 2 => score += 3. * (1. / (index + 1) as f64), // CG match
-                0 | 3 => score += 2. * (1. / (index + 1) as f64), // AT match
+                b'G' | b'C' => score += 3. * (1. / (index + 1) as f64), // CG match
+                b'A' | b'T' => score += 2. * (1. / (index + 1) as f64), // AT match
                 _ => continue,
             }
         }
@@ -191,9 +187,10 @@ fn apply_bonus(match_bool: &Vec<bool>) -> f64 {
     return score;
 }
 
-pub fn calc_at_offset(seq1: &[usize], seq2: &[usize], offset: i32) -> Option<f64> {
+pub fn calc_at_offset(seq1: &[u8], seq2: &[u8], offset: i32) -> Option<f64> {
     // Create the mapping
-    let mut mapping: Vec<(usize, usize)> = Vec::new();
+    let mut mapping: Vec<(usize, usize)> = Vec::with_capacity(seq1.len().max(seq2.len()));
+
     for x in 0..seq1.len() {
         let seq2_index = x as i32 + offset;
         if seq2_index >= 0 {
@@ -204,12 +201,12 @@ pub fn calc_at_offset(seq1: &[usize], seq2: &[usize], offset: i32) -> Option<f64
     // Create the match_bool
     let match_bool = mapping
         .iter()
-        .map(|(seq2i, seq1i)| MATCH_ARRAY[seq1[*seq1i] as usize][seq2[*seq2i] as usize])
+        .map(|(seq2i, seq1i)| scores::match_array(seq1[*seq1i], seq2[*seq2i]))
         .collect();
 
-    let mut dg_score = calc_dangling_ends_stabilty(&seq1, &seq2, &mapping);
+    let mut dg_score = calc_dangling_ends_stability(&seq1, &seq2, &mapping);
 
-    match calc_extention(seq1, &match_bool) {
+    match calc_extension(seq1, &match_bool) {
         Some(score) => dg_score += score,
         None => return None,
     };
@@ -224,7 +221,7 @@ pub fn calc_at_offset(seq1: &[usize], seq2: &[usize], offset: i32) -> Option<f64
     return Some(dg_score);
 }
 
-pub fn does_seq1_extend(seq1: &[usize], seq2: &[usize], t: f64) -> bool {
+pub fn does_seq1_extend(seq1: &[u8], seq2: &[u8], t: f64) -> bool {
     let mut seq2_rev = seq2.to_owned();
     seq2_rev.reverse();
 
@@ -242,17 +239,32 @@ pub fn does_seq1_extend(seq1: &[usize], seq2: &[usize], t: f64) -> bool {
     return false;
 }
 
+pub fn does_seq1_extend_no_alloc(seq1: &[u8], seq2_rev: &[u8], t: f64) -> bool {
+    for offset in -(seq1.len() as i32 - 2)..(seq2_rev.len() as i32) - (seq1.len() as i32) {
+        match calc_at_offset(&seq1, &seq2_rev, offset) {
+            Some(score) => {
+                //println!("{}", score);
+                if score <= t {
+                    return true;
+                }
+            }
+            None => (),
+        }
+    }
+    return false;
+}
+
 pub fn do_seqs_interact(seq1: &str, seq2: &str, t: f64) -> bool {
-    let s1 = encode_base(seq1);
-    let s2 = encode_base(seq2);
+    let s1 = seq1.as_bytes();
+    let s2 = seq2.as_bytes();
 
     return does_seq1_extend(&s1, &s2, t) | does_seq1_extend(&s2, &s1, t);
 }
 
 pub fn do_pools_interact(pool1: Vec<&str>, pool2: Vec<&str>, t: f64) -> bool {
     // Encode the pools
-    let pool1_encoded: Vec<Vec<usize>> = pool1.iter().map(|s| encode_base(s)).collect();
-    let pool2_encoded: Vec<Vec<usize>> = pool2.iter().map(|s| encode_base(s)).collect();
+    let pool1_encoded: Vec<Vec<u8>> = pool1.iter().map(|s| s.as_bytes().to_vec()).collect();
+    let pool2_encoded: Vec<Vec<u8>> = pool2.iter().map(|s| s.as_bytes().to_vec()).collect();
 
     // Will look for interactions between every seq in pool1 and pool2
     for (s1, s2) in pool1_encoded.iter().cartesian_product(pool2_encoded.iter()) {
@@ -312,7 +324,7 @@ mod tests {
 
         // base_to_encode = {"A": 0, "T": 3, "C": 1, "G": 2}
         assert_eq!(
-            calc_nn_thermo(&encode_base(seq1), &encode_base(seq2), &mapping),
+            calc_nn_thermo(seq1.as_bytes(), seq2.as_bytes(), &mapping),
             pred_score
         )
     }
@@ -354,7 +366,7 @@ mod tests {
 
         // base_to_encode = {"A": 0, "T": 1, "C": 2, "G": 3}
         assert_eq!(
-            calc_nn_thermo(&encode_base(seq1), &encode_base(seq2), &mapping),
+            calc_nn_thermo(seq1.as_bytes(), seq2.as_bytes(), &mapping),
             pred_score
         )
     }
@@ -404,7 +416,7 @@ mod tests {
         assert_eq!(super::MATCH_ARRAY[g][t], false);
     }
     #[test]
-    fn test_ensure_consistant_result() {
+    fn test_ensure_consistent_result() {
         // nCoV-2019_76_RIGHT_0 nCoV-2019_18_LEFT_0
         // score: -40.74 (-40.736826004)
         // 5'-ACACCTGTGCCTGTTAAACCAT-3' >
@@ -416,7 +428,7 @@ mod tests {
         let offset = -12;
 
         assert_eq!(
-            super::calc_at_offset(&encode_base(s1), &encode_base(s2), offset),
+            super::calc_at_offset(s1.as_bytes(), s2.as_bytes(), offset),
             Some(-40.736826004)
         );
     }
@@ -433,8 +445,8 @@ mod tests {
         let threshold = -27.0;
 
         assert!(super::does_seq1_extend(
-            &encode_base(s1),
-            &encode_base(s2),
+            s1.as_bytes(),
+            s2.as_bytes(),
             threshold,
         ));
     }

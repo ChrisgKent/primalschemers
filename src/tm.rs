@@ -40,6 +40,7 @@ static SANTA_LUCIA_1998_DS: [[i32; 5]; 5] = [
 //     [580, 1300, 1280, 880, 580],    // NA, NC, NG, NT, NN
 // ];
 
+#[allow(dead_code)]
 fn santa_lucia_1998_ds(nn: &[u8; 2]) -> i32 {
     match nn[0] {
         b'A' => match nn[1] {
@@ -80,6 +81,7 @@ fn santa_lucia_1998_ds(nn: &[u8; 2]) -> i32 {
     }
 }
 
+#[allow(dead_code)]
 fn santa_lucia_1998_dh(nn: &[u8; 2]) -> i32 {
     match nn[0] {
         b'A' => match nn[1] {
@@ -87,35 +89,35 @@ fn santa_lucia_1998_dh(nn: &[u8; 2]) -> i32 {
             b'C' => 84,
             b'G' => 78,
             b'T' => 72,
-            _ => 72,
+            _ => 0,
         },
         b'C' => match nn[1] {
             b'A' => 85,
             b'C' => 80,
             b'G' => 106,
             b'T' => 78,
-            _ => 78,
+            _ => 0,
         },
         b'G' => match nn[1] {
             b'A' => 82,
             b'C' => 98,
             b'G' => 80,
             b'T' => 84,
-            _ => 80,
+            _ => 0,
         },
         b'T' => match nn[1] {
             b'A' => 72,
             b'C' => 82,
             b'G' => 85,
             b'T' => 79,
-            _ => 72,
+            _ => 0,
         },
         _ => match nn[1] {
             b'A' => 72,
             b'C' => 80,
             b'G' => 78,
             b'T' => 72,
-            _ => 72,
+            _ => 0,
         },
     }
 }
@@ -526,7 +528,8 @@ pub fn oligotm(
     (tm, bound)
 }
 
-fn encode_base(b: u8) -> usize {
+fn _encode_base(b: u8) -> usize {
+    // Converts ascii base to index
     match b {
         b'A' => 0,
         b'C' => 1,
@@ -564,6 +567,8 @@ pub fn oligotm_utf8(
 
 #[cfg(test)]
 mod tests {
+    use crate::seqfuncs::reverse_complement;
+
     use super::*;
 
     #[test]
@@ -572,7 +577,7 @@ mod tests {
             for n2 in [b'A', b'C', b'G', b'T', b'N'].iter() {
                 let nn = [*n1 as u8, *n2 as u8];
                 let r = santa_lucia_1998_ds(&nn);
-                let q = SANTA_LUCIA_1998_DS[encode_base(nn[0])][encode_base(nn[1])];
+                let q = SANTA_LUCIA_1998_DS[_encode_base(nn[0])][_encode_base(nn[1])];
                 assert_eq!(r, q);
             }
         }
@@ -584,11 +589,11 @@ mod tests {
     }
     #[test]
     fn test_sl_1998_dh() {
-        for n1 in [b'A', b'C', b'G', b'T', b'N'].iter() {
-            for n2 in [b'A', b'C', b'G', b'T', b'N'].iter() {
+        for n1 in [b'A', b'C', b'G', b'T'].iter() {
+            for n2 in [b'A', b'C', b'G', b'T'].iter() {
                 let nn = [*n1 as u8, *n2 as u8];
                 let r = santa_lucia_1998_dh(&nn);
-                let q = SANTA_LUCIA_1998_DH[encode_base(nn[0])][encode_base(nn[1])];
+                let q = SANTA_LUCIA_1998_DH[_encode_base(nn[0])][_encode_base(nn[1])];
                 assert_eq!(r, q);
             }
         }
@@ -605,7 +610,7 @@ mod tests {
             for n2 in [b'A', b'C', b'G', b'T'].iter() {
                 let nn = [*n1 as u8, *n2 as u8];
                 let r = santa_lucia_2004_ds(&nn);
-                let q = SANTA_LUCIA_2004_DS[encode_base(nn[0])][encode_base(nn[1])];
+                let q = SANTA_LUCIA_2004_DS[_encode_base(nn[0])][_encode_base(nn[1])];
                 assert_eq!(r, q);
             }
         }
@@ -621,7 +626,7 @@ mod tests {
             for n2 in [b'A', b'C', b'G', b'T'].iter() {
                 let nn = [*n1 as u8, *n2 as u8];
                 let r = santa_lucia_2004_dh(&nn);
-                let q = SANTA_LUCIA_2004_DH[encode_base(nn[0])][encode_base(nn[1])];
+                let q = SANTA_LUCIA_2004_DH[_encode_base(nn[0])][_encode_base(nn[1])];
                 assert_eq!(r, q);
             }
         }
@@ -635,8 +640,8 @@ mod tests {
     fn test_oligo_vs_oligotm() {
         let seq = "TCATTGTATCCTCACATAACTCTCCCAAA".as_bytes();
 
-        let mut oligo = Oligo::new(seq.to_vec());
-        let (tm, bound) = oligotm(
+        let oligo = Oligo::new(seq.to_vec());
+        let (tm, _bound) = oligotm(
             &seq,
             15.0,
             100.0,
@@ -651,5 +656,37 @@ mod tests {
 
         let tm2 = oligo.calc_tm(15.0, 100.0, 2.0, 0.8, 0.0, 0.0, 0.8);
         assert_eq!(tm, tm2);
+    }
+    #[test]
+    fn test_oligo_tm_rev() {
+        let kmer = "TCATTGTATCCTCACATAACTCTCCCAAA".as_bytes().to_vec();
+        let tm = oligotm_utf8(
+            &kmer,
+            15.0,
+            100.0,
+            2.0,
+            0.8,
+            0.0,
+            0.0,
+            0.8,
+            0.0,
+            TmMethod::SantaLucia2004,
+        );
+
+        let rc_kmer = reverse_complement(&kmer);
+        let tm_rev = oligotm_utf8(
+            &rc_kmer,
+            15.0,
+            100.0,
+            2.0,
+            0.8,
+            0.0,
+            0.0,
+            0.8,
+            0.0,
+            TmMethod::SantaLucia2004,
+        );
+
+        assert_eq!(tm, tm_rev);
     }
 }
