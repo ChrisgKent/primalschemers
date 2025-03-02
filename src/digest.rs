@@ -10,12 +10,43 @@ use std::collections::HashMap;
 use indicatif::{ParallelProgressIterator, ProgressBar, ProgressStyle};
 use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 
-static MIN_PRIMER_LEN: usize = 19;
-static MAX_PRIMER_LEN: usize = 50;
-static MAX_WALK: usize = 100;
-static PRIMER_TM_MAX: f64 = 62.5;
-static PRIMER_TM_MIN: f64 = 59.5;
-static MAX_HOMOPOLYMERS: usize = 4;
+pub struct DigestConfig {
+    pub primer_len_min: usize,
+    pub primer_len_max: usize,
+    pub primer_gc_max: f64,
+    pub primer_gc_min: f64,
+    pub primer_tm_max: f64,
+    pub primer_tm_min: f64,
+    pub max_homopolymers: usize,
+    pub max_walk: usize,
+    pub min_freq: f64,
+}
+
+impl DigestConfig {
+    pub fn new(
+        primer_len_min: Option<usize>,
+        primer_len_max: Option<usize>,
+        primer_gc_max: Option<f64>,
+        primer_gc_min: Option<f64>,
+        primer_tm_max: Option<f64>,
+        primer_tm_min: Option<f64>,
+        max_walk: Option<usize>,
+        max_homopolymers: Option<usize>,
+        min_freq: Option<f64>,
+    ) -> DigestConfig {
+        DigestConfig {
+            primer_len_min: primer_len_min.unwrap_or(19),
+            primer_len_max: primer_len_max.unwrap_or(34),
+            primer_gc_max: primer_gc_max.unwrap_or(0.55),
+            primer_gc_min: primer_gc_min.unwrap_or(0.35),
+            primer_tm_max: primer_tm_max.unwrap_or(62.5),
+            primer_tm_min: primer_tm_min.unwrap_or(59.5),
+            max_homopolymers: max_homopolymers.unwrap_or(5),
+            max_walk: max_walk.unwrap_or(80),
+            min_freq: min_freq.unwrap_or(0.0),
+        }
+    }
+}
 
 #[derive(Eq, PartialEq, Hash, Debug, Clone)]
 pub enum DigestError {
@@ -25,6 +56,8 @@ pub enum DigestError {
     GapOnSetBase,
     NoValidPrimer,
     MaxWalk,
+    EndOfSequence,
+    ToLong,
 }
 
 #[derive(Eq, PartialEq, Hash, Debug, Clone)]
@@ -39,11 +72,10 @@ pub enum ThermoResult {
 }
 
 #[derive(Eq, PartialEq, Hash, Debug, Clone)]
-
 pub enum IndexResult {
     ThermoResult(ThermoResult),
     DigestError(DigestError),
-    Pass,
+    Pass(),
 }
 
 pub struct DigestionKmers {
@@ -62,12 +94,12 @@ impl DigestionKmers {
     pub fn calc_freq(&self, total: f64) -> f64 {
         self.count / total
     }
-    pub fn thermo_check(&mut self) -> &Option<IndexResult> {
+    pub fn _thermo_check(&mut self, dconf: &DigestConfig) -> &Option<IndexResult> {
         // Returns the None if valid primer
         let result = match &self.seq {
-            Some(seq) => match thermo_check(&seq) {
-                ThermoResult::Pass => IndexResult::Pass,
-                _ => IndexResult::ThermoResult(thermo_check(&seq)),
+            Some(seq) => match thermo_check(&seq, dconf) {
+                ThermoResult::Pass => IndexResult::Pass(),
+                _ => IndexResult::ThermoResult(thermo_check(&seq, dconf)),
             },
             // If
             None => IndexResult::DigestError(DigestError::NoValidPrimer),
@@ -83,25 +115,25 @@ impl DigestionKmers {
     }
     fn rc(&mut self) -> &Option<Vec<u8>> {
         self.seq = match &self.seq {
-            Some(seq) => Some(seq.iter().map(|b| complement_base(*b)).collect()),
+            Some(seq) => Some(seq.iter().map(|b| complement_base(*b)).rev().collect()),
             None => None,
         };
         &self.seq
     }
 }
 
-fn thermo_check(kmer: &[u8]) -> ThermoResult {
+fn thermo_check(kmer: &[u8], dconf: &DigestConfig) -> ThermoResult {
     // Check GC content
     let gc = gc_content(kmer);
-    if gc < 0.4 {
+    if gc < dconf.primer_gc_min {
         return ThermoResult::LowGC;
     }
-    if gc > 0.6 {
+    if gc > dconf.primer_gc_max {
         return ThermoResult::HighGC;
     }
 
     // Check homopolymer
-    if max_homopolymer(kmer) > MAX_HOMOPOLYMERS {
+    if max_homopolymer(kmer) > dconf.max_homopolymers {
         return ThermoResult::Homopolymer;
     }
 
@@ -119,10 +151,10 @@ fn thermo_check(kmer: &[u8]) -> ThermoResult {
         0.0,
         tm::TmMethod::SantaLucia2004,
     );
-    if tm >= PRIMER_TM_MAX {
+    if tm >= dconf.primer_tm_max {
         return ThermoResult::HighTm;
     }
-    if tm < PRIMER_TM_MIN {
+    if tm < dconf.primer_tm_min {
         return ThermoResult::LowTm;
     }
 
@@ -130,14 +162,17 @@ fn thermo_check(kmer: &[u8]) -> ThermoResult {
     ThermoResult::Pass
 }
 
-fn process_seqs(seq_counts: HashMap<Result<Vec<u8>, DigestError>, f64>) -> Vec<DigestionKmers> {
-    let mut digested: Vec<DigestionKmers> = Vec::new();
+fn process_seqs(
+    seq_counts: HashMap<Result<Vec<u8>, DigestError>, f64>,
+    dconf: &DigestConfig,
+) -> Vec<DigestionKmers> {
+    let mut digested: Vec<DigestionKmers> = Vec::with_capacity(seq_counts.len());
     for (k, v) in seq_counts.into_iter() {
         let dk = match k {
             Ok(s) => {
                 // If sequence provided check thermo
                 let mut dk = DigestionKmers::new(Some(s), None, v as f64);
-                dk.thermo_check();
+                dk._thermo_check(dconf);
                 dk
             }
             Err(e) => {
@@ -149,8 +184,8 @@ fn process_seqs(seq_counts: HashMap<Result<Vec<u8>, DigestError>, f64>) -> Vec<D
     }
 
     // Apply a freq filter
-    let total: f64 = digested.iter().map(|d| d.count).sum();
-    digested.retain(|d| d.calc_freq(total) >= 0.01);
+    // let total: f64 = digested.iter().map(|d| d.count).sum();
+    // digested.retain(|d| d.calc_freq(total) >= dconf.min_freq);
 
     digested
 }
@@ -160,16 +195,22 @@ pub fn walk_right(
     l_index: usize,
     r_index: usize,
     kmer: tm::Oligo,
+    dconf: &DigestConfig,
 ) -> Vec<Result<Vec<u8>, DigestError>> {
     // Check tm
     let tm = kmer.calc_tm(15.0, 100.0, 2.0, 0.8, 0.0, 0.0, 0.8);
 
-    if tm >= PRIMER_TM_MIN {
+    if tm >= dconf.primer_tm_min {
         return vec![Ok(kmer.seq)];
     }
 
+    // Check len
+    if kmer.seq.len() > dconf.primer_len_max {
+        return vec![Err(DigestError::ToLong)];
+    }
+
     // Check if we've reached the end of the sequence
-    if r_index < l_index || r_index - l_index >= MAX_WALK {
+    if r_index < l_index || r_index - l_index >= dconf.max_walk {
         return vec![Err(DigestError::MaxWalk)];
     }
     // Check bounds
@@ -180,8 +221,8 @@ pub fn walk_right(
     let new_base = seq[r_index];
 
     match new_base {
-        b' ' => return vec![Err(DigestError::WalkedOutRight)],
-        b'-' => return walk_right(seq, l_index, r_index + 1, kmer),
+        b' ' => return vec![Err(DigestError::EndOfSequence)],
+        b'-' => return walk_right(seq, l_index, r_index + 1, kmer, dconf),
         _ => (),
     }
 
@@ -202,7 +243,7 @@ pub fn walk_right(
 
     for (base, mut kmer_c) in new_bases.iter().zip(kmer_clones) {
         kmer_c.add_base(*base);
-        let new_results = walk_right(seq, l_index, r_index + 1, kmer_c);
+        let new_results = walk_right(seq, l_index, r_index + 1, kmer_c, dconf);
         results.extend(new_results);
     }
     results
@@ -211,31 +252,42 @@ pub fn walk_right(
 pub fn digest_r_to_count(
     seqs: &Vec<&[u8]>,
     index: usize,
+    dconf: &DigestConfig,
 ) -> HashMap<Result<Vec<u8>, DigestError>, f64> {
     // Returns the kmer as read (left -> right) in the genomes
 
     let mut kmer_count: HashMap<Result<Vec<u8>, DigestError>, f64> = HashMap::new();
 
     // Check bounds
-    if index > seqs[0].len() - MIN_PRIMER_LEN {
+    if index > seqs[0].len() - dconf.primer_len_min {
         kmer_count.insert(Err(DigestError::WalkedOutRight), seqs.len() as f64);
         return kmer_count;
     }
-    let rhs = index + MIN_PRIMER_LEN;
+    let rhs = index + dconf.primer_len_min;
 
     // For each sequence, digest at the index
     for seq in seqs.iter() {
         // Check for gap on set base
-        if seq[index] == b'-' {
-            let c = kmer_count
-                .entry(Err(DigestError::GapOnSetBase))
-                .or_insert(0.0);
-            *c += 1.0;
-            continue;
+        match seq[index] {
+            b'-' => {
+                let c = kmer_count
+                    .entry(Err(DigestError::GapOnSetBase))
+                    .or_insert(0.0);
+                *c += 1.0;
+                continue;
+            }
+            b' ' => {
+                let c = kmer_count
+                    .entry(Err(DigestError::EndOfSequence))
+                    .or_insert(0.0);
+                *c += 1.0;
+                continue;
+            }
+            _ => (),
         }
 
         // Create the kmer slice
-        let mut kmer: Vec<u8> = Vec::with_capacity(MAX_PRIMER_LEN);
+        let mut kmer: Vec<u8> = Vec::with_capacity(dconf.primer_len_max);
         kmer.extend_from_slice(&seq[index..rhs]);
 
         // Remove gaps from the kmer
@@ -244,6 +296,7 @@ pub fn digest_r_to_count(
             .filter(|b| *b != b'-' && *b != b' ')
             .collect();
 
+        // Should not happen. As if set base is gap, it will be caught above
         if kmer.len() == 0 {
             let c = kmer_count
                 .entry(Err(DigestError::NoValidPrimer))
@@ -254,7 +307,7 @@ pub fn digest_r_to_count(
 
         if atcg_only(&kmer) {
             // No ambiguous bases
-            let results = walk_right(seq, index, rhs, tm::Oligo::new(kmer));
+            let results = walk_right(seq, index, rhs, tm::Oligo::new(kmer), dconf);
             for r in results {
                 let count = kmer_count.entry(r).or_insert(0.0);
                 *count += 1.0;
@@ -273,7 +326,7 @@ pub fn digest_r_to_count(
                 Some(expanded_kmer) => {
                     let num_kmers = expanded_kmer.len();
                     for ek in expanded_kmer.into_iter() {
-                        let results = walk_right(seq, index, rhs, tm::Oligo::new(ek));
+                        let results = walk_right(seq, index, rhs, tm::Oligo::new(ek), dconf);
                         for r in results {
                             let count = kmer_count.entry(r).or_insert(0.0);
                             *count += 1.0 / num_kmers as f64;
@@ -292,11 +345,16 @@ pub fn digest_r_to_count(
     kmer_count
 }
 
-fn digest_r_at_index(seqs: &Vec<&[u8]>, index: usize) -> Result<RKmer, IndexResult> {
-    let kmer_count: HashMap<Result<Vec<u8>, DigestError>, f64> = digest_r_to_count(seqs, index);
+pub fn digest_r_at_index(
+    seqs: &Vec<&[u8]>,
+    index: usize,
+    dconf: &DigestConfig,
+) -> Result<RKmer, IndexResult> {
+    let kmer_count: HashMap<Result<Vec<u8>, DigestError>, f64> =
+        digest_r_to_count(seqs, index, dconf);
 
     // Process the results
-    let mut dks = process_seqs(kmer_count);
+    let mut dks = process_seqs(kmer_count, dconf);
 
     // Reverse complement the sequences
     for dk in dks.iter_mut() {
@@ -307,7 +365,8 @@ fn digest_r_at_index(seqs: &Vec<&[u8]>, index: usize) -> Result<RKmer, IndexResu
         match &dk.status {
             // Pass
             Some(IndexResult::ThermoResult(ThermoResult::Pass)) => {}
-            Some(IndexResult::Pass) => {}
+            Some(IndexResult::Pass()) => {}
+            Some(IndexResult::DigestError(DigestError::EndOfSequence)) => {} // Ignore EOS errors
             // Fail
             Some(indexresult) => {
                 return Err(indexresult.clone());
@@ -317,6 +376,8 @@ fn digest_r_at_index(seqs: &Vec<&[u8]>, index: usize) -> Result<RKmer, IndexResu
             }
         }
     }
+    // Filter EOS
+    let dks: Vec<DigestionKmers> = dks.into_iter().filter(|dk| dk.seq.is_some()).collect();
 
     Ok(RKmer::new(
         dks.into_iter().map(|dk| dk.seq.unwrap()).collect(),
@@ -324,8 +385,56 @@ fn digest_r_at_index(seqs: &Vec<&[u8]>, index: usize) -> Result<RKmer, IndexResu
     ))
 }
 
-pub fn digest_r_primer(seq_array: &Vec<&[u8]>) -> Vec<Result<RKmer, IndexResult>> {
+pub fn digest_r_dk(seq_array: &Vec<&[u8]>, dconf: &DigestConfig) -> Vec<Vec<DigestionKmers>> {
     let indexes: Vec<usize> = (0..seq_array[0].len() + 1).collect();
+
+    // Check that all sequences are the same length
+    for seq in seq_array.iter() {
+        if seq.len() != seq_array[0].len() {
+            panic!("Sequences are not the same length");
+        }
+    }
+
+    let progress_bar = ProgressBar::new(indexes.len() as u64);
+    progress_bar.set_message("rprimer digestion");
+    progress_bar.set_style(
+        ProgressStyle::default_bar()
+            .template("{msg} [{elapsed}] {wide_bar:.cyan/blue} {pos:>7}/{len:7} {eta}")
+            .unwrap(),
+    );
+
+    let results: Vec<Vec<DigestionKmers>> = indexes
+        .par_iter()
+        .progress_with(progress_bar)
+        .map(|i| {
+            let kmer_count: HashMap<Result<Vec<u8>, DigestError>, f64> =
+                digest_r_to_count(seq_array, *i, dconf);
+
+            // Process the results
+            let mut dks = process_seqs(kmer_count, dconf);
+
+            // Reverse complement the sequences
+            for dk in dks.iter_mut() {
+                dk.rc();
+            }
+            dks
+        })
+        .collect();
+
+    results
+}
+
+pub fn digest_r_primer(
+    seq_array: &Vec<&[u8]>,
+    dconf: &DigestConfig,
+    rindexes: Option<Vec<usize>>,
+) -> Vec<Result<RKmer, IndexResult>> {
+    // Allow custom indexes
+    let indexes: Vec<usize> = match rindexes {
+        // Could add checks
+        Some(i) => i,
+        None => (0..seq_array[0].len() + 1).collect(),
+    };
 
     // Check that all sequences are the same length
     for seq in seq_array.iter() {
@@ -345,7 +454,7 @@ pub fn digest_r_primer(seq_array: &Vec<&[u8]>) -> Vec<Result<RKmer, IndexResult>
     let results: Vec<Result<RKmer, IndexResult>> = indexes
         .par_iter()
         .progress_with(progress_bar)
-        .map(|i| digest_r_at_index(&seq_array, *i))
+        .map(|i| digest_r_at_index(&seq_array, *i, dconf))
         .collect();
 
     results
@@ -356,16 +465,22 @@ pub fn walk_left(
     l_index: usize,
     r_index: usize,
     kmer: tm::Oligo,
+    dconf: &DigestConfig,
 ) -> Vec<Result<Vec<u8>, DigestError>> {
     // Check tm
     let tm = kmer.calc_tm(15.0, 100.0, 2.0, 0.8, 0.0, 0.0, 0.8);
 
-    if tm >= PRIMER_TM_MIN {
+    if tm >= dconf.primer_tm_min {
         return vec![Ok(kmer.seq)];
     }
 
+    // Check len
+    if kmer.seq.len() > dconf.primer_len_max {
+        return vec![Err(DigestError::ToLong)];
+    }
+
     // Check if we've reached the end of the sequence
-    if l_index > r_index || r_index - l_index >= MAX_WALK {
+    if l_index > r_index || r_index - l_index >= dconf.max_walk {
         return vec![Err(DigestError::MaxWalk)];
     }
     // Check bounds
@@ -377,8 +492,8 @@ pub fn walk_left(
 
     // If base is gap keep walking
     match new_base {
-        b'-' => return walk_left(seq, l_index - 1, r_index, kmer),
-        b' ' => return vec![Err(DigestError::WalkedOutLeft)],
+        b'-' => return walk_left(seq, l_index - 1, r_index, kmer, dconf),
+        b' ' => return vec![Err(DigestError::EndOfSequence)],
         _ => (),
     }
 
@@ -399,7 +514,7 @@ pub fn walk_left(
 
     for (base, mut kmer_c) in new_bases.iter().zip(kmer_clones) {
         kmer_c.add_base(complement_base(*base));
-        let new_results = walk_left(seq, l_index - 1, r_index, kmer_c);
+        let new_results = walk_left(seq, l_index - 1, r_index, kmer_c, dconf);
         results.extend(new_results);
     }
     results
@@ -408,28 +523,45 @@ pub fn walk_left(
 pub fn digest_f_to_count(
     seqs: &Vec<&[u8]>,
     index: usize,
+    dconf: &DigestConfig,
 ) -> HashMap<Result<Vec<u8>, DigestError>, f64> {
     let mut kmer_count: HashMap<Result<Vec<u8>, DigestError>, f64> = HashMap::new();
 
     // Check bounds
-    if index < MIN_PRIMER_LEN {
+    if index < dconf.primer_len_min {
         kmer_count.insert(Err(DigestError::WalkedOutLeft), seqs.len() as f64);
         return kmer_count;
     }
-    let lhs = index - MIN_PRIMER_LEN;
+    let lhs = index - dconf.primer_len_min;
+
+    if index == 0 {
+        kmer_count.insert(Err(DigestError::WalkedOutLeft), seqs.len() as f64);
+        return kmer_count;
+    }
 
     // For each sequence, digest at the index
     for seq in seqs.iter() {
         // Check for gap on set base
-        if seq[index - 1] == b'-' {
-            let c = kmer_count
-                .entry(Err(DigestError::GapOnSetBase))
-                .or_insert(0.0);
-            *c += 1.0;
-            continue;
+        match seq[index - 1] {
+            b'-' => {
+                let c = kmer_count
+                    .entry(Err(DigestError::GapOnSetBase))
+                    .or_insert(0.0);
+                *c += 1.0;
+                continue;
+            }
+            b' ' => {
+                let c = kmer_count
+                    .entry(Err(DigestError::EndOfSequence))
+                    .or_insert(0.0);
+                *c += 1.0;
+                continue;
+            }
+            _ => (),
         }
+
         // Create the kmer slice
-        let mut kmer: Vec<u8> = Vec::with_capacity(MAX_PRIMER_LEN);
+        let mut kmer: Vec<u8> = Vec::with_capacity(dconf.primer_len_max);
         kmer.extend_from_slice(&seq[lhs..index]);
         kmer = reverse_complement(&kmer); // Reverse is used as push is .O(1) and .insert(0) is O(n)
 
@@ -439,6 +571,7 @@ pub fn digest_f_to_count(
             .filter(|b| *b != b'-' && *b != b' ')
             .collect();
 
+        // Should not happen. As if set base is gap, it will be caught above
         if kmer.len() == 0 {
             let c = kmer_count
                 .entry(Err(DigestError::NoValidPrimer))
@@ -449,7 +582,7 @@ pub fn digest_f_to_count(
 
         if atcg_only(&kmer) {
             // No ambiguous bases
-            let results = walk_left(seq, lhs, index, tm::Oligo::new(kmer));
+            let results = walk_left(seq, lhs, index, tm::Oligo::new(kmer), dconf);
             for r in results {
                 let count = kmer_count.entry(r).or_insert(0.0);
                 *count += 1.0;
@@ -467,7 +600,7 @@ pub fn digest_f_to_count(
                 Some(expanded_kmer) => {
                     let num_kmers = expanded_kmer.len();
                     for ek in expanded_kmer.into_iter() {
-                        let results = walk_left(seq, lhs, index, tm::Oligo::new(ek));
+                        let results = walk_left(seq, lhs, index, tm::Oligo::new(ek), dconf);
                         for r in results {
                             let count = kmer_count.entry(r).or_insert(0.0);
                             *count += 1.0 / num_kmers as f64;
@@ -498,18 +631,24 @@ pub fn digest_f_to_count(
     un_reversed
 }
 
-fn digest_f_at_index(seqs: &Vec<&[u8]>, index: usize) -> Result<FKmer, IndexResult> {
-    let kmer_count: HashMap<Result<Vec<u8>, DigestError>, f64> = digest_f_to_count(seqs, index);
+fn digest_f_at_index(
+    seqs: &Vec<&[u8]>,
+    index: usize,
+    dconf: &DigestConfig,
+) -> Result<FKmer, IndexResult> {
+    let kmer_count: HashMap<Result<Vec<u8>, DigestError>, f64> =
+        digest_f_to_count(seqs, index, dconf);
 
     // Process the results
-    let dks = process_seqs(kmer_count);
+    let dks = process_seqs(kmer_count, dconf);
 
     // If any errors are found, return the error
     for dk in dks.iter() {
         match &dk.status {
             // Pass
             Some(IndexResult::ThermoResult(ThermoResult::Pass)) => {}
-            Some(IndexResult::Pass) => {}
+            Some(IndexResult::Pass()) => {}
+            Some(IndexResult::DigestError(DigestError::EndOfSequence)) => {} // Ignore EOS errors
             // Fail
             Some(indexresult) => {
                 return Err(indexresult.clone());
@@ -519,7 +658,8 @@ fn digest_f_at_index(seqs: &Vec<&[u8]>, index: usize) -> Result<FKmer, IndexResu
             }
         }
     }
-
+    // Filter EOS
+    let dks: Vec<DigestionKmers> = dks.into_iter().filter(|dk| dk.seq.is_some()).collect();
     // Create the FKmer
     Ok(FKmer::new(
         dks.into_iter().map(|dk| dk.seq.unwrap()).collect(),
@@ -527,8 +667,46 @@ fn digest_f_at_index(seqs: &Vec<&[u8]>, index: usize) -> Result<FKmer, IndexResu
     ))
 }
 
-pub fn digest_f_primer(seq_array: &Vec<&[u8]>) -> Vec<Result<FKmer, IndexResult>> {
+pub fn digest_f_dk(seq_array: &Vec<&[u8]>, dconf: &DigestConfig) -> Vec<Vec<DigestionKmers>> {
     let indexes: Vec<usize> = (0..seq_array[0].len() + 1).collect();
+    // Check that all sequences are the same length
+    for seq in seq_array.iter() {
+        if seq.len() != seq_array[0].len() {
+            panic!("Sequences are not the same length");
+        }
+    }
+
+    let progress_bar = ProgressBar::new(indexes.len() as u64);
+    progress_bar.set_message("fprimer digestion");
+    progress_bar.set_style(
+        ProgressStyle::default_bar()
+            .template("{msg} [{elapsed}] {wide_bar:.cyan/blue} {pos:>7}/{len:7} {eta}")
+            .unwrap(),
+    );
+
+    let results: Vec<Vec<DigestionKmers>> = indexes
+        .par_iter()
+        .progress_with(progress_bar)
+        .map(|i| {
+            let fkc = digest_f_to_count(&seq_array, *i, dconf);
+            process_seqs(fkc, dconf)
+        })
+        .collect();
+
+    results
+}
+
+pub fn digest_f_primer(
+    seq_array: &Vec<&[u8]>,
+    dconf: &DigestConfig,
+    findexes: Option<Vec<usize>>,
+) -> Vec<Result<FKmer, IndexResult>> {
+    // Allow custom indexes
+    let indexes: Vec<usize> = match findexes {
+        // Could add checks
+        Some(i) => i,
+        None => (0..seq_array[0].len() + 1).collect(),
+    };
     // Check that all sequences are the same length
     for seq in seq_array.iter() {
         if seq.len() != seq_array[0].len() {
@@ -547,7 +725,7 @@ pub fn digest_f_primer(seq_array: &Vec<&[u8]>) -> Vec<Result<FKmer, IndexResult>
     let results: Vec<Result<FKmer, IndexResult>> = indexes
         .par_iter()
         .progress_with(progress_bar)
-        .map(|i| digest_f_at_index(&seq_array, *i))
+        .map(|i| digest_f_at_index(&seq_array, *i, dconf))
         .collect();
 
     results
@@ -559,9 +737,10 @@ mod tests {
 
     #[test]
     fn test_digest_r_to_count() {
+        let dconf = DigestConfig::new(None, None, None, None, None, None, None, None, None);
         let seqs = vec!["ATTAAAGGTTTATACCTTCCCAGGTAACAAACCAACCAACTTTCGATCTCTTGTAGATCT".as_bytes()];
 
-        let digested = digest_r_to_count(&seqs, 30);
+        let digested = digest_r_to_count(&seqs, 30, &dconf);
         // Check num of seqs
         assert_eq!(digested.len(), 1);
 
@@ -586,10 +765,47 @@ mod tests {
     }
 
     #[test]
+    fn test_digest_r_at_index_ps3() {
+        let dconf = DigestConfig::new(
+            None,
+            None,
+            Some(0.8),
+            Some(0.2),
+            None,
+            None,
+            None,
+            None,
+            None,
+        );
+        let seqs =
+            vec!["CCAATGGTGCAAAAGGTATAATCANTAATGTCCAATGGTGCAAAAGGTATAATCATTAATGT".as_bytes()];
+
+        let digested = digest_r_at_index(&seqs, 25, &dconf);
+        println!("{:?}", digested);
+        // Check num of seqs
+        assert_eq!(digested.is_ok(), true);
+
+        // Check index
+        let rkmer = digested.unwrap();
+        assert_eq!(rkmer.start(), 25);
+
+        // Match seq
+        assert_eq!(
+            rkmer.seqs(),
+            vec![
+                std::str::from_utf8("TGATTATACCTTTTGCACCATTGGACATTA".as_bytes())
+                    .unwrap()
+                    .to_string()
+            ]
+        );
+    }
+
+    #[test]
     fn test_digest_r_to_count_ambs() {
+        let dconf = DigestConfig::new(None, None, None, None, None, None, None, None, None);
         let seqs = vec!["ATTAAAGGTTTATACCTTCCCAGGTAACAAACCAACCAACTTTRCGATCTCTTGTAGATCT".as_bytes()];
 
-        let digested = digest_r_to_count(&seqs, 30);
+        let digested = digest_r_to_count(&seqs, 30, &dconf);
         // Check num of seqs
         assert_eq!(digested.len(), 2);
         // Check count of ambiguous base
@@ -600,7 +816,7 @@ mod tests {
         // Check sequence
         let seqs =
             vec!["ATTAAAGGTTTATACCTTCCCAGGTAACAAACCAACCAACTTTRCYGATCTCTTGTAGATCT".as_bytes()];
-        let digested = digest_r_to_count(&seqs, 30);
+        let digested = digest_r_to_count(&seqs, 30, &dconf);
         // Check num of seqs
         assert_eq!(digested.len(), 4);
         // Check count of ambiguous base
@@ -611,9 +827,10 @@ mod tests {
 
     #[test]
     fn test_digest_f_to_count() {
+        let dconf = DigestConfig::new(None, None, None, None, None, None, None, None, None);
         let seqs = vec!["ATTAAAGGTTTATACCTTCCCAGGTAACAAACCAACCAACTTTCGATCTCTTGTAGATCT".as_bytes()];
 
-        let digested = digest_f_to_count(&seqs, 40);
+        let digested = digest_f_to_count(&seqs, 40, &dconf);
         // Check num of seqs
         assert_eq!(digested.len(), 1);
 
@@ -628,10 +845,11 @@ mod tests {
 
     #[test]
     fn test_digest_f_to_count_ps3() {
+        let dconf = DigestConfig::new(None, None, None, None, None, None, None, None, None);
         let seqs =
             vec!["CCAATGGTGCAAAAGGTATAATCATTAATGTCCAATGGTGCAAAAGGTATAATCATTAATGT".as_bytes()];
 
-        let digested = digest_f_to_count(&seqs, 60);
+        let digested = digest_f_to_count(&seqs, 60, &dconf);
         // Check num of seqs
         assert_eq!(digested.len(), 1);
 
@@ -645,9 +863,10 @@ mod tests {
 
     #[test]
     fn test_digest_f_to_count_gap() {
+        let dconf = DigestConfig::new(None, None, None, None, None, None, None, None, None);
         let seqs = vec!["ATTAAAGGTTTATACCTTCCCAGGTAACAAACCAACCAA-TTTCGATCTCTTGTAGATCT".as_bytes()];
 
-        let digested = digest_f_to_count(&seqs, 40);
+        let digested = digest_f_to_count(&seqs, 40, &dconf);
         // Check num of seqs
         assert_eq!(digested.len(), 1);
         // Check sequence
@@ -656,9 +875,10 @@ mod tests {
 
     #[test]
     fn test_digest_f_to_count_ambs() {
+        let dconf = DigestConfig::new(None, None, None, None, None, None, None, None, None);
         let seqs = vec!["ATTAAAGGTTTATACCTTCCCAGGTAACAAACCAACCAARTTTCGATCTCTTGTAGATCT".as_bytes()];
 
-        let digested = digest_f_to_count(&seqs, 40);
+        let digested = digest_f_to_count(&seqs, 40, &dconf);
         // Check num of seqs
         assert_eq!(digested.len(), 2);
         // Check count of ambiguous base
@@ -668,7 +888,7 @@ mod tests {
 
         // Check sequence
         let seqs = vec!["ATTAAAGGTTTATACCTTCCCAGGTAACAAACCAACCRARTTTCGATCTCTTGTAGATCT".as_bytes()];
-        let digested = digest_f_to_count(&seqs, 40);
+        let digested = digest_f_to_count(&seqs, 40, &dconf);
         // Check num of seqs
         assert_eq!(digested.len(), 4);
         // Check count of ambiguous base
@@ -679,9 +899,10 @@ mod tests {
 
     #[test]
     fn test_digest_f_to_count_wl() {
+        let dconf = DigestConfig::new(None, None, None, None, None, None, None, None, None);
         let seqs = vec!["ATTAAAGGTTTATACCTTCCCAGGTAACAAACCAACCAA-TTTCGATCTCTTGTAGATCT".as_bytes()];
 
-        let digested = digest_f_to_count(&seqs, 4);
+        let digested = digest_f_to_count(&seqs, 4, &dconf);
         // Check num of seqs
         assert_eq!(digested.len(), 1);
         // Check sequence
@@ -693,9 +914,10 @@ mod tests {
 
     #[test]
     fn test_digest_f_to_count_invalid_base() {
+        let dconf = DigestConfig::new(None, None, None, None, None, None, None, None, None);
         let seqs = vec!["ATTAAAGGTTTATACCTTCCCAGGTAACAAACCAACCAANTTTCGATCTCTTGTAGATCT".as_bytes()];
 
-        let digested = digest_f_to_count(&seqs, 40);
+        let digested = digest_f_to_count(&seqs, 40, &dconf);
         // Check num of seqs
         assert_eq!(digested.len(), 1);
         // Check sequence
