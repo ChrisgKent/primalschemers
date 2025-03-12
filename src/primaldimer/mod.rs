@@ -275,6 +275,30 @@ pub fn do_pools_interact(pool1: Vec<&str>, pool2: Vec<&str>, t: f64) -> bool {
     return false;
 }
 
+pub fn do_pool_interact_u8(seqs1: &Vec<Vec<u8>>, seqs2: &Vec<Vec<u8>>, t: f64) -> bool {
+    // Create the reverse complement of the sequences
+    let mut seqs1_rev: Vec<Vec<u8>> = seqs1.iter().map(|s| s.to_vec()).collect();
+    for s in seqs1_rev.iter_mut() {
+        s.reverse();
+    }
+    let mut seqs2_rev: Vec<Vec<u8>> = seqs2.iter().map(|s| s.to_vec()).collect();
+    for s in seqs2_rev.iter_mut() {
+        s.reverse();
+    }
+
+    // Check for interactions
+    for seq1i in 0..seqs1.len() {
+        for seq2i in 0..seqs2.len() {
+            if does_seq1_extend_no_alloc(&seqs1[seq1i], &seqs2_rev[seq2i], t)
+                || does_seq1_extend_no_alloc(&seqs2[seq2i], &seqs1_rev[seq1i], t)
+            {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
