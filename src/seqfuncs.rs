@@ -23,13 +23,61 @@ pub fn atcg_only(kmer: &[u8]) -> bool {
     true
 }
 
+#[derive(Debug, PartialEq)]
+pub enum KmerCheck {
+    ATCGOnly,
+    ContainsAmbiguities,
+    ContainsInvalidBases,
+    ContainsNs,
+}
+
+pub fn check_kmer(kmer: &[u8]) -> KmerCheck {
+    // Any invalid bases will return ContainsInvalidBases
+    // Any N will return ContainsNs
+    // Any ambiguity base will return ContainsAmbiguities
+    // If the kmer is ATCG only, return ATCGOnly
+
+    let mut contains_ambs = false;
+    let mut contains_ns = false;
+
+    for base in kmer.iter() {
+        // Check for non iupac and non gap bases
+        if !is_iupac_base(base) {
+            // If the base is a gap or space, continue
+            match base {
+                b'-' | b' ' => {
+                    continue;
+                }
+                _ => return KmerCheck::ContainsInvalidBases,
+            }
+        }
+        // Check for N
+        if base == &b'N' {
+            contains_ns = true;
+            continue;
+        }
+        // Check for amb
+        if is_amb(base) {
+            contains_ambs = true;
+            continue;
+        }
+    }
+    // Return the appropriate KmerCheck
+    match (contains_ambs, contains_ns) {
+        (_, true) => KmerCheck::ContainsNs,
+        (false, false) => KmerCheck::ATCGOnly,
+        (true, false) => KmerCheck::ContainsAmbiguities,
+    }
+}
+
 pub fn contains_ambs(kmer: &[u8]) -> bool {
-    kmer.iter().any(|&base| {
-        matches!(
-            base,
-            b'R' | b'Y' | b'S' | b'W' | b'K' | b'M' | b'D' | b'H' | b'V'
-        )
-    })
+    kmer.iter().any(|&base| is_amb(&base))
+}
+pub fn is_amb(base: &u8) -> bool {
+    matches!(
+        base,
+        b'R' | b'Y' | b'S' | b'W' | b'K' | b'M' | b'D' | b'H' | b'V'
+    )
 }
 
 pub fn max_homopolymer(kmer: &[u8]) -> usize {
@@ -51,28 +99,21 @@ pub fn max_homopolymer(kmer: &[u8]) -> usize {
     max
 }
 
-pub fn contains_invalid_bases(kmer: &[u8]) -> bool {
-    for base in kmer.iter() {
-        match base {
-            b'A' => {}
-            b'C' => {}
-            b'G' => {}
-            b'T' => {}
-            b'R' => {}
-            b'Y' => {}
-            b'S' => {}
-            b'W' => {}
-            b'K' => {}
-            b'M' => {}
-            b'D' => {}
-            b'H' => {}
-            b'V' => {}
-            b'-' => {}
-            b' ' => {}
-            _ => return true,
-        }
+pub fn is_iupac_base(base: &u8) -> bool {
+    match base {
+        b'A' | b'C' | b'G' | b'T' | b'R' | b'Y' | b'S' | b'W' | b'K' | b'M' | b'D' | b'H'
+        | b'V' | b'B' | b'N' => true,
+        _ => false,
     }
-    false
+}
+
+pub fn is_allowed_base(base: &u8) -> bool {
+    // iupac, ' ', or '-'
+    is_iupac_base(base) || *base == b'-' || *base == b' '
+}
+
+pub fn contains_allowed_bases(kmer: &[u8]) -> bool {
+    kmer.iter().all(|&base| is_allowed_base(&base))
 }
 
 pub fn expand_amb_base(amb: u8) -> Option<Vec<u8>> {
@@ -220,17 +261,32 @@ mod tests {
     }
 
     #[test]
-    fn test_contains_invalid_bases() {
-        assert_eq!(contains_invalid_bases(b"ATCG"), false);
+    fn test_contains_allowed_bases() {
+        assert_eq!(contains_allowed_bases(b"ATCG"), true);
 
-        assert_eq!(contains_invalid_bases(b"ATCGN"), true);
+        assert_eq!(contains_allowed_bases(b"ATCGN"), true);
 
-        assert_eq!(contains_invalid_bases(b"ATCGX"), true);
+        assert_eq!(contains_allowed_bases(b"ATCGX"), false);
 
-        assert_eq!(contains_invalid_bases(b"ATCG-"), false);
+        assert_eq!(contains_allowed_bases(b"ATCG-"), true);
 
-        assert_eq!(contains_invalid_bases(b"ATCGH"), false);
+        assert_eq!(contains_allowed_bases(b"ATCGH"), true);
 
-        assert_eq!(contains_invalid_bases(b"ATCG."), true);
+        assert_eq!(contains_allowed_bases(b"ATCG."), false);
+    }
+
+    #[test]
+    fn test_check_kmer() {
+        assert_eq!(check_kmer(b"ATCG"), KmerCheck::ATCGOnly);
+        assert_eq!(check_kmer(b"ATCG "), KmerCheck::ATCGOnly);
+        assert_eq!(check_kmer(b"ATCG-"), KmerCheck::ATCGOnly);
+        assert_eq!(check_kmer(b"ATCG-N"), KmerCheck::ContainsNs);
+        assert_eq!(check_kmer(b"ATCGX-"), KmerCheck::ContainsInvalidBases);
+        assert_eq!(check_kmer(b"ATCGH"), KmerCheck::ContainsAmbiguities);
+        assert_eq!(check_kmer(b"ATCG."), KmerCheck::ContainsInvalidBases);
+
+        // Check Priority
+        assert_eq!(check_kmer(b"ATCGNRY "), KmerCheck::ContainsNs);
+        assert_eq!(check_kmer(b"-ATCGNR."), KmerCheck::ContainsInvalidBases);
     }
 }

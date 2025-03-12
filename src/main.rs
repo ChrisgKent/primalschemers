@@ -1,5 +1,6 @@
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 
+pub mod config;
 pub mod digest;
 pub mod kmer;
 pub mod mapping;
@@ -55,7 +56,7 @@ fn remove_end_insertions(mut seq_array: Vec<Vec<u8>>) -> Vec<Vec<u8>> {
 }
 
 fn main() {
-    let (_id, seqs) = fasta_reader("");
+    let (_id, seqs) = fasta_reader("/Users/kentcg/primerschemes/primerschemes/artic-measles/400/v1.0.0/work/all_genomes.align.ds.align.repaired.fasta");
 
     // let seqs = vec![
     //     "ATCGATCGATCGATCGATCGATCGATCGATCGATCGATCGYTCGATCGATCGATCGATCGATCGATCGATCGATCGATCGATCGATCGATCGATCG".to_string(),
@@ -76,7 +77,9 @@ fn main() {
 
     let seq_array_refs: Vec<&[u8]> = seq_array.iter().map(|seq| seq.as_slice()).collect();
 
-    let dconf = digest::DigestConfig::new(None, None, None, None, None, None, None, None, None);
+    let dconf = config::DigestConfig::new(
+        None, None, None, None, None, None, None, None, None, None, None,
+    );
 
     pool.install(|| {
         let digested_f: Vec<Result<kmer::FKmer, digest::IndexResult>> =

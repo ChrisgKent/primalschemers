@@ -1,52 +1,15 @@
+use crate::config::DigestConfig;
 use crate::kmer::{FKmer, RKmer};
 use crate::seqfuncs::{
-    atcg_only, complement_base, contains_ambs, expand_amb_base, expand_amb_sequence, gc_content,
-    max_homopolymer, reverse_complement,
+    check_kmer, complement_base, expand_amb_base, expand_amb_sequence, gc_content, max_homopolymer,
+    reverse_complement, KmerCheck,
 };
-use crate::tm;
+use crate::{primaldimer, tm};
 
 use std::collections::HashMap;
 
 use indicatif::{ParallelProgressIterator, ProgressBar, ProgressStyle};
 use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
-
-pub struct DigestConfig {
-    pub primer_len_min: usize,
-    pub primer_len_max: usize,
-    pub primer_gc_max: f64,
-    pub primer_gc_min: f64,
-    pub primer_tm_max: f64,
-    pub primer_tm_min: f64,
-    pub max_homopolymers: usize,
-    pub max_walk: usize,
-    pub min_freq: f64,
-}
-
-impl DigestConfig {
-    pub fn new(
-        primer_len_min: Option<usize>,
-        primer_len_max: Option<usize>,
-        primer_gc_max: Option<f64>,
-        primer_gc_min: Option<f64>,
-        primer_tm_max: Option<f64>,
-        primer_tm_min: Option<f64>,
-        max_walk: Option<usize>,
-        max_homopolymers: Option<usize>,
-        min_freq: Option<f64>,
-    ) -> DigestConfig {
-        DigestConfig {
-            primer_len_min: primer_len_min.unwrap_or(19),
-            primer_len_max: primer_len_max.unwrap_or(34),
-            primer_gc_max: primer_gc_max.unwrap_or(0.55),
-            primer_gc_min: primer_gc_min.unwrap_or(0.35),
-            primer_tm_max: primer_tm_max.unwrap_or(62.5),
-            primer_tm_min: primer_tm_min.unwrap_or(59.5),
-            max_homopolymers: max_homopolymers.unwrap_or(5),
-            max_walk: max_walk.unwrap_or(80),
-            min_freq: min_freq.unwrap_or(0.0),
-        }
-    }
-}
 
 #[derive(Eq, PartialEq, Hash, Debug, Clone)]
 pub enum DigestError {
@@ -58,6 +21,7 @@ pub enum DigestError {
     MaxWalk,
     EndOfSequence,
     ToLong,
+    ContainsN,
 }
 
 #[derive(Eq, PartialEq, Hash, Debug, Clone)]
@@ -69,6 +33,7 @@ pub enum ThermoResult {
     Homopolymer,
     HighTm,
     LowTm,
+    PrimerDimer,
 }
 
 #[derive(Eq, PartialEq, Hash, Debug, Clone)]
@@ -184,8 +149,8 @@ fn process_seqs(
     }
 
     // Apply a freq filter
-    // let total: f64 = digested.iter().map(|d| d.count).sum();
-    // digested.retain(|d| d.calc_freq(total) >= dconf.min_freq);
+    let total: f64 = digested.iter().map(|d| d.count).sum();
+    digested.retain(|d| d.calc_freq(total) >= dconf.min_freq);
 
     digested
 }
@@ -223,6 +188,7 @@ pub fn walk_right(
     match new_base {
         b' ' => return vec![Err(DigestError::EndOfSequence)],
         b'-' => return walk_right(seq, l_index, r_index + 1, kmer, dconf),
+        b'N' => return vec![Err(DigestError::ContainsN)],
         _ => (),
     }
 
@@ -305,40 +271,49 @@ pub fn digest_r_to_count(
             continue;
         }
 
-        if atcg_only(&kmer) {
-            // No ambiguous bases
-            let results = walk_right(seq, index, rhs, tm::Oligo::new(kmer), dconf);
-            for r in results {
-                let count = kmer_count.entry(r).or_insert(0.0);
-                *count += 1.0;
-            }
-        } else if contains_ambs(&kmer) {
-            // Handle ambiguous bases
-            let expanded_kmer = expand_amb_sequence(&kmer);
-
-            match expanded_kmer {
-                None => {
-                    let c = kmer_count
-                        .entry(Err(DigestError::InvalidBase))
-                        .or_insert(0.0);
-                    *c += 1.0;
+        match check_kmer(&kmer) {
+            KmerCheck::ATCGOnly => {
+                // No ambiguous bases
+                let results = walk_right(seq, index, rhs, tm::Oligo::new(kmer), dconf);
+                let num_results = results.len() as f64;
+                for r in results {
+                    let count = kmer_count.entry(r).or_insert(0.0);
+                    *count += 1.0 / num_results as f64;
                 }
-                Some(expanded_kmer) => {
-                    let num_kmers = expanded_kmer.len();
-                    for ek in expanded_kmer.into_iter() {
-                        let results = walk_right(seq, index, rhs, tm::Oligo::new(ek), dconf);
-                        for r in results {
-                            let count = kmer_count.entry(r).or_insert(0.0);
-                            *count += 1.0 / num_kmers as f64;
+            }
+            KmerCheck::ContainsAmbiguities => {
+                // Handle ambiguous bases
+                let expanded_kmer = expand_amb_sequence(&kmer);
+                match expanded_kmer {
+                    None => {
+                        let c = kmer_count
+                            .entry(Err(DigestError::InvalidBase))
+                            .or_insert(0.0);
+                        *c += 1.0;
+                    }
+                    Some(expanded_kmer) => {
+                        let num_kmers = expanded_kmer.len();
+                        for ek in expanded_kmer.into_iter() {
+                            let results = walk_right(seq, index, rhs, tm::Oligo::new(ek), dconf);
+                            let num_results = results.len() as f64;
+                            for r in results {
+                                let count = kmer_count.entry(r).or_insert(0.0);
+                                *count += 1.0 / (num_results * num_kmers as f64);
+                            }
                         }
                     }
                 }
             }
-        } else {
-            let c = kmer_count
-                .entry(Err(DigestError::InvalidBase))
-                .or_insert(0.0);
-            *c += 1.0;
+            KmerCheck::ContainsInvalidBases => {
+                let c = kmer_count
+                    .entry(Err(DigestError::InvalidBase))
+                    .or_insert(0.0);
+                *c += 1.0;
+            }
+            KmerCheck::ContainsNs => {
+                let c = kmer_count.entry(Err(DigestError::ContainsN)).or_insert(0.0);
+                *c += 1.0;
+            }
         }
     }
 
@@ -367,6 +342,14 @@ pub fn digest_r_at_index(
             Some(IndexResult::ThermoResult(ThermoResult::Pass)) => {}
             Some(IndexResult::Pass()) => {}
             Some(IndexResult::DigestError(DigestError::EndOfSequence)) => {} // Ignore EOS errors
+            // Maybe ignore N
+            Some(IndexResult::DigestError(DigestError::ContainsN)) => {
+                if dconf.ignore_n {
+                    continue;
+                } else {
+                    return Err(IndexResult::DigestError(DigestError::ContainsN));
+                }
+            }
             // Fail
             Some(indexresult) => {
                 return Err(indexresult.clone());
@@ -379,10 +362,16 @@ pub fn digest_r_at_index(
     // Filter EOS
     let dks: Vec<DigestionKmers> = dks.into_iter().filter(|dk| dk.seq.is_some()).collect();
 
-    Ok(RKmer::new(
-        dks.into_iter().map(|dk| dk.seq.unwrap()).collect(),
-        index,
-    ))
+    let seqs = dks.into_iter().map(|dk| dk.seq.unwrap()).collect();
+    if primaldimer::do_pool_interact_u8(&seqs, &seqs, dconf.dimerscore) {
+        return Err(IndexResult::ThermoResult(ThermoResult::PrimerDimer));
+    }
+
+    if seqs.len() == 0 {
+        return Err(IndexResult::DigestError(DigestError::NoValidPrimer));
+    }
+
+    Ok(RKmer::new(seqs, index))
 }
 
 pub fn digest_r_dk(seq_array: &Vec<&[u8]>, dconf: &DigestConfig) -> Vec<Vec<DigestionKmers>> {
@@ -494,6 +483,7 @@ pub fn walk_left(
     match new_base {
         b'-' => return walk_left(seq, l_index - 1, r_index, kmer, dconf),
         b' ' => return vec![Err(DigestError::EndOfSequence)],
+        b'N' => return vec![Err(DigestError::ContainsN)],
         _ => (),
     }
 
@@ -580,39 +570,49 @@ pub fn digest_f_to_count(
             continue;
         }
 
-        if atcg_only(&kmer) {
-            // No ambiguous bases
-            let results = walk_left(seq, lhs, index, tm::Oligo::new(kmer), dconf);
-            for r in results {
-                let count = kmer_count.entry(r).or_insert(0.0);
-                *count += 1.0;
-            }
-        } else if contains_ambs(&kmer) {
-            // Handle ambiguous bases
-            let expanded_kmer = expand_amb_sequence(&kmer);
-            match expanded_kmer {
-                None => {
-                    let c = kmer_count
-                        .entry(Err(DigestError::InvalidBase))
-                        .or_insert(0.0);
-                    *c += 1.0;
+        match check_kmer(&kmer) {
+            KmerCheck::ATCGOnly => {
+                // No ambiguous bases
+                let results = walk_left(seq, lhs, index, tm::Oligo::new(kmer), dconf);
+                let num_results = results.len() as f64;
+                for r in results {
+                    let count = kmer_count.entry(r).or_insert(0.0);
+                    *count += 1.0 / num_results;
                 }
-                Some(expanded_kmer) => {
-                    let num_kmers = expanded_kmer.len();
-                    for ek in expanded_kmer.into_iter() {
-                        let results = walk_left(seq, lhs, index, tm::Oligo::new(ek), dconf);
-                        for r in results {
-                            let count = kmer_count.entry(r).or_insert(0.0);
-                            *count += 1.0 / num_kmers as f64;
+            }
+            KmerCheck::ContainsAmbiguities => {
+                // Handle ambiguous bases
+                let expanded_kmer = expand_amb_sequence(&kmer);
+                match expanded_kmer {
+                    None => {
+                        let c = kmer_count
+                            .entry(Err(DigestError::InvalidBase))
+                            .or_insert(0.0);
+                        *c += 1.0;
+                    }
+                    Some(expanded_kmer) => {
+                        let num_kmers = expanded_kmer.len();
+                        for ek in expanded_kmer.into_iter() {
+                            let results = walk_left(seq, lhs, index, tm::Oligo::new(ek), dconf);
+                            let num_results = results.len() as f64;
+                            for r in results {
+                                let count = kmer_count.entry(r).or_insert(0.0);
+                                *count += 1.0 / (num_results * num_kmers as f64);
+                            }
                         }
                     }
                 }
             }
-        } else {
-            let c = kmer_count
-                .entry(Err(DigestError::InvalidBase))
-                .or_insert(0.0);
-            *c += 1.0;
+            KmerCheck::ContainsInvalidBases => {
+                let c = kmer_count
+                    .entry(Err(DigestError::InvalidBase))
+                    .or_insert(0.0);
+                *c += 1.0;
+            }
+            KmerCheck::ContainsNs => {
+                let c = kmer_count.entry(Err(DigestError::ContainsN)).or_insert(0.0);
+                *c += 1.0;
+            }
         }
     }
     // Un-reverse the kmer
@@ -628,6 +628,7 @@ pub fn digest_f_to_count(
             }
         }
     }
+
     un_reversed
 }
 
@@ -640,7 +641,7 @@ fn digest_f_at_index(
         digest_f_to_count(seqs, index, dconf);
 
     // Process the results
-    let dks = process_seqs(kmer_count, dconf);
+    let dks: Vec<DigestionKmers> = process_seqs(kmer_count, dconf);
 
     // If any errors are found, return the error
     for dk in dks.iter() {
@@ -649,6 +650,14 @@ fn digest_f_at_index(
             Some(IndexResult::ThermoResult(ThermoResult::Pass)) => {}
             Some(IndexResult::Pass()) => {}
             Some(IndexResult::DigestError(DigestError::EndOfSequence)) => {} // Ignore EOS errors
+            // Ignore N
+            Some(IndexResult::DigestError(DigestError::ContainsN)) => {
+                if dconf.ignore_n {
+                    continue;
+                } else {
+                    return Err(IndexResult::DigestError(DigestError::ContainsN));
+                }
+            }
             // Fail
             Some(indexresult) => {
                 return Err(indexresult.clone());
@@ -660,11 +669,16 @@ fn digest_f_at_index(
     }
     // Filter EOS
     let dks: Vec<DigestionKmers> = dks.into_iter().filter(|dk| dk.seq.is_some()).collect();
+
+    let seqs = dks.into_iter().map(|dk| dk.seq.unwrap()).collect();
+    if primaldimer::do_pool_interact_u8(&seqs, &seqs, dconf.dimerscore) {
+        return Err(IndexResult::ThermoResult(ThermoResult::PrimerDimer));
+    }
+    if seqs.len() == 0 {
+        return Err(IndexResult::DigestError(DigestError::NoValidPrimer));
+    }
     // Create the FKmer
-    Ok(FKmer::new(
-        dks.into_iter().map(|dk| dk.seq.unwrap()).collect(),
-        index,
-    ))
+    Ok(FKmer::new(seqs, index))
 }
 
 pub fn digest_f_dk(seq_array: &Vec<&[u8]>, dconf: &DigestConfig) -> Vec<Vec<DigestionKmers>> {
@@ -737,7 +751,9 @@ mod tests {
 
     #[test]
     fn test_digest_r_to_count() {
-        let dconf = DigestConfig::new(None, None, None, None, None, None, None, None, None);
+        let dconf = DigestConfig::new(
+            None, None, None, None, None, None, None, None, None, None, None,
+        );
         let seqs = vec!["ATTAAAGGTTTATACCTTCCCAGGTAACAAACCAACCAACTTTCGATCTCTTGTAGATCT".as_bytes()];
 
         let digested = digest_r_to_count(&seqs, 30, &dconf);
@@ -776,6 +792,8 @@ mod tests {
             None,
             None,
             None,
+            None,
+            None,
         );
         let seqs =
             vec!["CCAATGGTGCAAAAGGTATAATCANTAATGTCCAATGGTGCAAAAGGTATAATCATTAATGT".as_bytes()];
@@ -802,7 +820,9 @@ mod tests {
 
     #[test]
     fn test_digest_r_to_count_ambs() {
-        let dconf = DigestConfig::new(None, None, None, None, None, None, None, None, None);
+        let dconf = DigestConfig::new(
+            None, None, None, None, None, None, None, None, None, None, None,
+        );
         let seqs = vec!["ATTAAAGGTTTATACCTTCCCAGGTAACAAACCAACCAACTTTRCGATCTCTTGTAGATCT".as_bytes()];
 
         let digested = digest_r_to_count(&seqs, 30, &dconf);
@@ -827,7 +847,9 @@ mod tests {
 
     #[test]
     fn test_digest_f_to_count() {
-        let dconf = DigestConfig::new(None, None, None, None, None, None, None, None, None);
+        let dconf = DigestConfig::new(
+            None, None, None, None, None, None, None, None, None, None, None,
+        );
         let seqs = vec!["ATTAAAGGTTTATACCTTCCCAGGTAACAAACCAACCAACTTTCGATCTCTTGTAGATCT".as_bytes()];
 
         let digested = digest_f_to_count(&seqs, 40, &dconf);
@@ -845,7 +867,9 @@ mod tests {
 
     #[test]
     fn test_digest_f_to_count_ps3() {
-        let dconf = DigestConfig::new(None, None, None, None, None, None, None, None, None);
+        let dconf = DigestConfig::new(
+            None, None, None, None, None, None, None, None, None, None, None,
+        );
         let seqs =
             vec!["CCAATGGTGCAAAAGGTATAATCATTAATGTCCAATGGTGCAAAAGGTATAATCATTAATGT".as_bytes()];
 
@@ -863,7 +887,9 @@ mod tests {
 
     #[test]
     fn test_digest_f_to_count_gap() {
-        let dconf = DigestConfig::new(None, None, None, None, None, None, None, None, None);
+        let dconf = DigestConfig::new(
+            None, None, None, None, None, None, None, None, None, None, None,
+        );
         let seqs = vec!["ATTAAAGGTTTATACCTTCCCAGGTAACAAACCAACCAA-TTTCGATCTCTTGTAGATCT".as_bytes()];
 
         let digested = digest_f_to_count(&seqs, 40, &dconf);
@@ -875,15 +901,26 @@ mod tests {
 
     #[test]
     fn test_digest_f_to_count_ambs() {
-        let dconf = DigestConfig::new(None, None, None, None, None, None, None, None, None);
+        let dconf = DigestConfig::new(
+            None, None, None, None, None, None, None, None, None, None, None,
+        );
         let seqs = vec!["ATTAAAGGTTTATACCTTCCCAGGTAACAAACCAACCAARTTTCGATCTCTTGTAGATCT".as_bytes()];
 
         let digested = digest_f_to_count(&seqs, 40, &dconf);
+
         // Check num of seqs
         assert_eq!(digested.len(), 2);
         // Check count of ambiguous base
         for (_key, count) in digested.iter() {
             assert_eq!(count, &0.5, "Count: {}", count);
+        }
+        // Check sequences
+        let expected = vec![
+            "CTTCCCAGGTAACAAACCAACCAAT".as_bytes().to_vec(),
+            "TTCCCAGGTAACAAACCAACCAAC".as_bytes().to_vec(),
+        ];
+        for e in expected.into_iter() {
+            assert!(digested.contains_key(&Ok(e)))
         }
 
         // Check sequence
@@ -898,8 +935,27 @@ mod tests {
     }
 
     #[test]
+    fn test_digest_f_to_count_ambs_extend() {
+        let dconf = DigestConfig::new(
+            None, None, None, None, None, None, None, None, None, None, None,
+        );
+        let seqs = vec!["ATTAAAGGTTTATACCTTCCCAGGTAACAAACCAACCRARTTTCGATCTCTTGTAGATCT".as_bytes()];
+        // Check that appending amb bases works as expected
+        let digested = digest_f_to_count(&seqs, 60, &dconf);
+        // Check num of seqs
+        assert_eq!(digested.len(), 4);
+
+        // Check freqs
+        for (_key, count) in digested.iter() {
+            assert_eq!(*count, 1.0 / digested.len() as f64, "Count: {}", count);
+        }
+    }
+
+    #[test]
     fn test_digest_f_to_count_wl() {
-        let dconf = DigestConfig::new(None, None, None, None, None, None, None, None, None);
+        let dconf = DigestConfig::new(
+            None, None, None, None, None, None, None, None, None, None, None,
+        );
         let seqs = vec!["ATTAAAGGTTTATACCTTCCCAGGTAACAAACCAACCAA-TTTCGATCTCTTGTAGATCT".as_bytes()];
 
         let digested = digest_f_to_count(&seqs, 4, &dconf);
@@ -913,9 +969,24 @@ mod tests {
     }
 
     #[test]
-    fn test_digest_f_to_count_invalid_base() {
-        let dconf = DigestConfig::new(None, None, None, None, None, None, None, None, None);
+    fn test_digest_f_to_count_contains_n() {
+        let dconf = DigestConfig::new(
+            None, None, None, None, None, None, None, None, None, None, None,
+        );
         let seqs = vec!["ATTAAAGGTTTATACCTTCCCAGGTAACAAACCAACCAANTTTCGATCTCTTGTAGATCT".as_bytes()];
+
+        let digested = digest_f_to_count(&seqs, 40, &dconf);
+        // Check num of seqs
+        assert_eq!(digested.len(), 1);
+        // Check sequence
+        assert_eq!(digested.contains_key(&Err(DigestError::ContainsN)), true);
+    }
+    #[test]
+    fn test_digest_f_to_count_invalid_base() {
+        let dconf = DigestConfig::new(
+            None, None, None, None, None, None, None, None, None, None, None,
+        );
+        let seqs = vec!["ATTAAAGGTTTATACCTTCCCAGGTAACAAACCAACCAA!TTTCGATCTCTTGTAGATCT".as_bytes()];
 
         let digested = digest_f_to_count(&seqs, 40, &dconf);
         // Check num of seqs

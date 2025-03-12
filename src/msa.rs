@@ -1,3 +1,4 @@
+use crate::config;
 use crate::digest::IndexResult;
 use crate::kmer::{FKmer, RKmer};
 use crate::seqio;
@@ -24,7 +25,7 @@ pub struct MSA {
     pub _chromnames: String,
     pub _mapping_array: Vec<Option<usize>>,
     pub _ref_to_msa: Vec<usize>,
-    dconf: digest::DigestConfig,
+    dconf: config::DigestConfig,
 
     // Calculated on demand
     pub fkmers: Option<Vec<FKmer>>,
@@ -48,7 +49,9 @@ impl MSA {
             .map(|s| s.as_bytes().to_vec())
             .collect::<Vec<Vec<u8>>>();
 
-        let dconf = digest::DigestConfig::new(None, None, None, None, None, None, None, None, None);
+        let dconf = config::DigestConfig::new(
+            None, None, None, None, None, None, None, None, None, None, None,
+        );
 
         // Remove end insertions
         let seq_array = seqio::remove_end_insertions(seq_array);

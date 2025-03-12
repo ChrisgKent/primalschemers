@@ -1,9 +1,11 @@
-use digest::{DigestConfig, IndexResult};
+use config::DigestConfig;
+use digest::IndexResult;
 use indicatif::ProgressBar;
 use pyo3::prelude::*;
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use std::{collections::HashMap, time::Duration};
 
+pub mod config;
 pub mod digest;
 pub mod kmer;
 pub mod mapping;
@@ -14,11 +16,12 @@ pub mod seqio;
 pub mod tm;
 
 #[pyfunction]
-#[pyo3(signature = (msa_path, ncores, remap, findexes=None, rindexes=None, primer_len_min=None, primer_len_max=None, primer_gc_max=None, primer_gc_min=None, primer_tm_max=None, primer_tm_min=None, max_walk=None, max_homopolymers=None, min_freq=None))]
+#[pyo3(signature = (msa_path, ncores, remap, findexes=None, rindexes=None, primer_len_min=None, primer_len_max=None, primer_gc_max=None, primer_gc_min=None, primer_tm_max=None, primer_tm_min=None, max_walk=None, max_homopolymers=None, min_freq=None, ignore_n=None, dimerscore=None))]
 fn digest_seq(
     msa_path: &str,
     ncores: usize,
     remap: bool,
+
     findexes: Option<Vec<usize>>,
     rindexes: Option<Vec<usize>>,
     primer_len_min: Option<usize>,
@@ -30,6 +33,8 @@ fn digest_seq(
     max_walk: Option<usize>,
     max_homopolymers: Option<usize>,
     min_freq: Option<f64>,
+    ignore_n: Option<bool>,
+    dimerscore: Option<f64>,
 ) -> PyResult<(Vec<kmer::FKmer>, Vec<kmer::RKmer>, Vec<String>)> {
     // Start the spinner
     let spinner = ProgressBar::new_spinner();
@@ -47,6 +52,8 @@ fn digest_seq(
         max_walk,
         max_homopolymers,
         min_freq,
+        ignore_n,
+        dimerscore,
     );
 
     // Read in the MSA
@@ -83,6 +90,16 @@ fn digest_seq(
         let digested_f = digest::digest_f_primer(&seq_slice, &dconf, findexes);
         let digested_r = digest::digest_r_primer(&seq_slice, &dconf, rindexes);
 
+        for (i, res) in digested_f.iter().enumerate() {
+            match res {
+                Ok(_kmer) => {
+                    log_strs.push(format!("fprimer: {i} Pass"));
+                }
+                Err(e) => {
+                    log_strs.push(format!("fprimer: {i} {:?}", e));
+                }
+            }
+        }
         // Create the reverse digest
         // Start the spinner
         let spinner = ProgressBar::new_spinner();
@@ -123,7 +140,7 @@ fn digest_seq(
         log_strs.push(format!("fprimer status:{:?}", values));
         let mut values = rp_count.into_iter().collect::<Vec<(&IndexResult, usize)>>();
         values.sort_by(|a, b| b.1.cmp(&a.1));
-        log_strs.push(format!("fprimer status:{:?}", values));
+        log_strs.push(format!("rprimer status:{:?}", values));
 
         let fkmers: Vec<kmer::FKmer> = digested_f.into_par_iter().filter_map(Result::ok).collect();
         let rkmers: Vec<kmer::RKmer> = digested_r.into_par_iter().filter_map(Result::ok).collect();
@@ -132,12 +149,23 @@ fn digest_seq(
         if remap {
             let mut rm_fk: Vec<kmer::FKmer> = Vec::with_capacity(fkmers.len());
             for mut fk in fkmers.into_iter() {
-                match mapping_array[fk.end()] {
-                    Some(i) => {
-                        fk.remap(i);
-                        rm_fk.push(fk);
+                // Check for being on last base
+                if fk.end() == mapping_array.len() {
+                    match mapping_array[fk.end() - 1] {
+                        Some(i) => {
+                            fk.remap(i + 1);
+                            rm_fk.push(fk);
+                        }
+                        None => {}
                     }
-                    None => {}
+                } else {
+                    match mapping_array[fk.end()] {
+                        Some(i) => {
+                            fk.remap(i);
+                            rm_fk.push(fk);
+                        }
+                        None => {}
+                    }
                 }
             }
 
