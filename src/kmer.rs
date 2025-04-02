@@ -1,7 +1,9 @@
-use indicatif::{ParallelProgressIterator, ProgressStyle};
+use indicatif::{ParallelProgressIterator, ProgressBar, ProgressIterator, ProgressStyle};
 use pyo3::prelude::*;
-use rayon::iter::{IntoParallelIterator, IntoParallelRefIterator, ParallelIterator};
+use rayon::prelude::*;
 use std::str::from_utf8;
+
+use crate::primaldimer;
 
 #[derive(Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
 #[pyclass]
@@ -140,30 +142,47 @@ impl RKmer {
     }
 }
 
-pub fn generate_primerpairs<'a>(
-    fkmers: &Vec<&'a FKmer>,
-    rkmers: &Vec<&'a RKmer>,
+#[pyfunction]
+pub fn generate_primerpairs_py(
+    py: Python<'_>,
+    fkmers: Vec<Py<FKmer>>,
+    rkmers: Vec<Py<RKmer>>,
     t: f64,
-    amplicion_size_min: usize,
-    amplicion_size_max: usize,
+    amplicon_size_min: usize,
+    amplicon_size_max: usize,
+) -> PyResult<Vec<(Py<FKmer>, Py<RKmer>)>> {
+    // Set up pb
+    let progress_bar = ProgressBar::new(fkmers.len() as u64);
+    progress_bar.set_message("primerpair generation");
+    progress_bar.set_style(
+        ProgressStyle::default_bar()
+            .template("{msg} [{elapsed}] {wide_bar:.cyan/blue} {pos:>7}/{len:7} {eta}")
+            .unwrap(),
+    );
 
-    min_overlap: usize,
-) -> Vec<(&'a FKmer, &'a RKmer)> {
-    //Set up pb
-    let progress_bar =
-        ProgressStyle::with_template("[{elapsed}] {wide_bar:40.red/white} {pos:>7}/{len:7} {eta}")
-            .unwrap();
+    // Create two arrays on set bases for rapid GIL free lookup
+    let rkmer_ends = rkmers
+        .iter()
+        .map(|r| r.borrow(py).start())
+        .collect::<Vec<usize>>();
 
-    // Generate the primer pairs in parallel
-    let nested_pp: Vec<Vec<(&FKmer, &RKmer)>> = fkmers
-        .par_iter()
-        .progress_with_style(progress_bar)
+    // ensure rkmers are sorted
+    if !rkmer_ends.is_sorted() {
+        panic!("RKmer list is not sorted")
+    }
+
+    // Generate the primer pairs
+    let nested_pp: Vec<Vec<(Py<FKmer>, Py<RKmer>)>> = fkmers
+        .iter()
+        .progress_with(progress_bar)
         .map(|fkmer| {
-            let rkmer_window = &fkmer.end() + amplicion_size_min;
+            let rkmer_window_start = fkmer.borrow(py).end() + amplicon_size_min;
+            let rkmer_window_end = &fkmer.borrow(py).end() + amplicon_size_max;
+
             // Get the start position of the rkmer window
-            let pos_rkmer_start = match rkmers.binary_search_by(|r| r.start().cmp(&rkmer_window)) {
+            let pos_rkmer_start = match rkmer_ends.binary_search(&rkmer_window_start) {
                 Ok(mut pos) => {
-                    while rkmers[pos].start() == rkmer_window && pos > 0 {
+                    while rkmer_ends[pos] >= rkmer_window_start && pos > 0 {
                         pos -= 1;
                     }
                     pos
@@ -171,23 +190,85 @@ pub fn generate_primerpairs<'a>(
                 Err(pos) => pos,
             };
 
-            let max_index = &fkmer.end() + amplicion_size_max;
-
-            let mut primer_pairs: Vec<(&FKmer, &RKmer)> = Vec::new();
+            let mut primer_pairs: Vec<(Py<FKmer>, Py<RKmer>)> = Vec::new();
             for i in pos_rkmer_start..rkmers.len() {
                 let rkmer = &rkmers[i];
-                if rkmer.start() > max_index {
+                if rkmer.borrow(py).start() > rkmer_window_end {
                     break;
                 }
-                // if do_kmers_interact(*fkmer, *rkmer, t) {
-                //     primer_pairs.push((fkmer, rkmer));
-                // }
+                if primaldimer::do_pool_interact_u8_slice(
+                    &fkmer.borrow(py).seqs_bytes(),
+                    &rkmer.borrow(py).seqs_bytes(),
+                    t,
+                ) {
+                    primer_pairs.push((fkmer.clone_ref(py), rkmer.clone_ref(py)));
+                }
             }
             primer_pairs
         })
         .collect();
 
-    nested_pp.into_par_iter().flatten().collect()
+    let pp: Vec<(Py<FKmer>, Py<RKmer>)> = nested_pp.into_iter().flatten().collect();
+    Ok(pp)
+}
+
+pub fn generate_primerpairs<'a>(
+    fkmers: &Vec<&'a FKmer>,
+    rkmers: &Vec<&'a RKmer>,
+    dimerscore: f64,
+    amplicon_size_min: usize,
+    amplicon_size_max: usize,
+) -> Vec<(&'a FKmer, &'a RKmer)> {
+    // Set up pb
+    let progress_bar = ProgressBar::new(fkmers.len() as u64);
+    progress_bar.set_message("primerpair generation");
+    progress_bar.set_style(
+        ProgressStyle::default_bar()
+            .template("{msg} [{elapsed}] {wide_bar:.cyan/blue} {pos:>7}/{len:7} {eta}")
+            .unwrap(),
+    );
+
+    // ensure rkmers are sorted
+    if !rkmers.is_sorted_by(|a, b| a.start() < b.start()) {
+        panic!("RKmer list is not sorted")
+    }
+
+    // Generate the primer pairs
+    let nested_pp: Vec<Vec<(&'a FKmer, &'a RKmer)>> = fkmers
+        .par_iter()
+        .progress_with(progress_bar)
+        .map(|fkmer| {
+            let rkmer_window_start = fkmer.end() + amplicon_size_min;
+            let rkmer_window_end = fkmer.end() + amplicon_size_max;
+
+            // Get the start position of the rkmer window
+            let pos_rkmer_start =
+                match rkmers.binary_search_by(|rk| rk.start().cmp(&rkmer_window_start)) {
+                    Ok(mut pos) => {
+                        while rkmers[pos].start() >= rkmer_window_start && pos > 0 {
+                            pos -= 1;
+                        }
+                        pos
+                    }
+                    Err(pos) => pos,
+                };
+
+            let mut primer_pairs: Vec<(&'a FKmer, &'a RKmer)> = Vec::new();
+            for i in pos_rkmer_start..rkmers.len() {
+                let rkmer = &rkmers[i];
+                if rkmer.start() > rkmer_window_end {
+                    break;
+                }
+                if primaldimer::do_pool_interact_u8(&fkmer.seqs, &rkmer.seqs, dimerscore) {
+                    primer_pairs.push((fkmer, rkmer));
+                }
+            }
+            primer_pairs
+        })
+        .collect();
+
+    let pp: Vec<(&'a FKmer, &'a RKmer)> = nested_pp.into_iter().flatten().collect();
+    pp
 }
 
 #[cfg(test)]
@@ -230,24 +311,5 @@ mod tests {
         let seqs = vec![b"ATCG".to_vec(), b"ATCG".to_vec()];
         let rkmer = RKmer::new(seqs, 100);
         assert_eq!(rkmer.lens(), vec![4]);
-    }
-
-    #[test]
-    fn test_do_kmers_interact() {
-        let seqs1 = vec![b"ACACCTGTGCCTGTTAAACCAT".to_vec()];
-        let seqs2 = vec![b"TGGAAATACCCACAAGTTAATGGTTTAAC".to_vec()];
-        let fkmer = FKmer::new(seqs1, 100);
-        let rkmer = RKmer::new(seqs2, 100);
-
-        // assert_eq!(do_kmers_interact(&fkmer, &rkmer, -26.0), true);
-    }
-    #[test]
-    fn test_do_kmers_not_interact() {
-        let seqs1 = vec![b"CCAAACAAAGTTGGGTAAGGATCGA".to_vec()];
-        let seqs2 = vec![b"ACTGGTCACTCTGAACAACCTCC".to_vec()];
-        let fkmer = FKmer::new(seqs1, 100);
-        let rkmer = RKmer::new(seqs2, 100);
-
-        // assert_eq!(do_kmers_interact(&fkmer, &rkmer, -26.0), false);
     }
 }

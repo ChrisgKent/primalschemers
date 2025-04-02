@@ -238,6 +238,7 @@ fn _core(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(digest_seq, m)?)?;
     m.add_function(wrap_pyfunction!(do_seqs_interact, m)?)?;
     m.add_function(wrap_pyfunction!(do_pool_interact, m)?)?;
+    m.add_function(wrap_pyfunction!(kmer::generate_primerpairs_py, m)?)?;
 
     Ok(())
 }

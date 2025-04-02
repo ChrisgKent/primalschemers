@@ -1,7 +1,6 @@
 mod scores;
-use scores::{nn_dg_scores, MATCH_ARRAY, NN_SCORES, SEQ1_OVERHANG_ARRAY, SEQ2_OVERHANG_ARRAY};
-
 use itertools::Itertools;
+use scores::{nn_dg_scores, MATCH_ARRAY, NN_SCORES, SEQ1_OVERHANG_ARRAY, SEQ2_OVERHANG_ARRAY};
 
 static BONUS_ARRAY: [f64; 10] = [
     1.11217618,
@@ -26,7 +25,41 @@ static BONUS_ARRAY: [f64; 10] = [
 // 8 = MATCH_PROP_COEF
 // 9 = BUBBLE_COEF
 
+// 5' ATAATCAATCTAGACTATCGTATTTGCCTCC
+// 5' CGTGATATTTTCTATCAATGGGGAAATTATTACG
+
+// 5' ATAATCAATCTAGACTATCGTATTTGCCTCC
+//                             ^i
+//                          3' GCATTATTAAAGGGGTAACTATCTTTTATAGTGC
+//                                  ^j
+
 //base_to_u8 = {"A": 65, "T": 84, "C": 67, "G": 71}
+
+pub fn calc_core_region(seq1: &[u8], seq2: &[u8], i: usize, j: usize) -> f64 {
+    let mut dg_score = 0.;
+
+    // Check for overhang on the right side
+    if i < seq1.len() - 1 {
+        match nn_dg_scores(&seq1[i..i + 2], &seq2[j..j + 2]) {
+            Some(score) => dg_score += score,
+            None => dg_score += BONUS_ARRAY[6],
+        }
+    } else {
+        dg_score += BONUS_ARRAY[2];
+    }
+
+    // Check for overhang on the left side
+    if j > 0 {
+        match nn_dg_scores(&seq1[i..i + 2], &seq2[j..j + 2]) {
+            Some(score) => dg_score += score,
+            None => dg_score += BONUS_ARRAY[1],
+        }
+    } else {
+        dg_score += BONUS_ARRAY[2];
+    }
+
+    return dg_score;
+}
 
 // base_to_encode = {"A": 0, "T": 3, "C": 1, "G": 2}
 pub fn encode_base(sequence: &str) -> Vec<usize> {
@@ -276,6 +309,30 @@ pub fn do_pools_interact(pool1: Vec<&str>, pool2: Vec<&str>, t: f64) -> bool {
 }
 
 pub fn do_pool_interact_u8(seqs1: &Vec<Vec<u8>>, seqs2: &Vec<Vec<u8>>, t: f64) -> bool {
+    // Create the reverse complement of the sequences
+    let mut seqs1_rev: Vec<Vec<u8>> = seqs1.iter().map(|s| s.to_vec()).collect();
+    for s in seqs1_rev.iter_mut() {
+        s.reverse();
+    }
+    let mut seqs2_rev: Vec<Vec<u8>> = seqs2.iter().map(|s| s.to_vec()).collect();
+    for s in seqs2_rev.iter_mut() {
+        s.reverse();
+    }
+
+    // Check for interactions
+    for seq1i in 0..seqs1.len() {
+        for seq2i in 0..seqs2.len() {
+            if does_seq1_extend_no_alloc(&seqs1[seq1i], &seqs2_rev[seq2i], t)
+                || does_seq1_extend_no_alloc(&seqs2[seq2i], &seqs1_rev[seq1i], t)
+            {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+pub fn do_pool_interact_u8_slice(seqs1: &Vec<&[u8]>, seqs2: &Vec<&[u8]>, t: f64) -> bool {
     // Create the reverse complement of the sequences
     let mut seqs1_rev: Vec<Vec<u8>> = seqs1.iter().map(|s| s.to_vec()).collect();
     for s in seqs1_rev.iter_mut() {
