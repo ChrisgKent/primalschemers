@@ -64,7 +64,7 @@ impl FKmer {
                 chrom,
                 self.end - seq.len(),
                 self.end,
-                format!("{}_LEFT_{}", amplicon_prefix, index),
+                format!("{}_LEFT_{}", amplicon_prefix, index + 1), // +1 for 1-based indexing
                 pool,
                 "+",
                 seq
@@ -74,6 +74,16 @@ impl FKmer {
     }
     pub fn remap(&mut self, end: usize) {
         self.end = end;
+    }
+    pub fn gc(&self) -> Vec<f64> {
+        // Calculate the GC content of each sequence
+        self.seqs
+            .iter()
+            .map(|s| {
+                let gc_count = s.iter().filter(|&&b| b == b'G' || b == b'C').count();
+                gc_count as f64 / s.len() as f64
+            })
+            .collect()
     }
 }
 
@@ -129,7 +139,7 @@ impl RKmer {
                 chrom,
                 self.start,
                 self.start + seq.len(),
-                format!("{}_RIGHT_{}", amplicon_prefix, index),
+                format!("{}_RIGHT_{}", amplicon_prefix, index + 1), // +1 for 1-based indexing
                 pool,
                 "-",
                 seq
@@ -139,6 +149,17 @@ impl RKmer {
     }
     pub fn remap(&mut self, start: usize) {
         self.start = start;
+    }
+
+    pub fn gc(&self) -> Vec<f64> {
+        // Calculate the GC content of each sequence
+        self.seqs
+            .iter()
+            .map(|s| {
+                let gc_count = s.iter().filter(|&&b| b == b'G' || b == b'C').count();
+                gc_count as f64 / s.len() as f64
+            })
+            .collect()
     }
 }
 

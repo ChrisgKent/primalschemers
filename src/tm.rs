@@ -324,12 +324,17 @@ impl Oligo {
         tm -= dmso_conc * dmso_fact;
         tm += (0.453 * ((gc_count / self.seq.len()) as f64) - 2.88) * formamide_conc;
 
-        // Calc bound
-        // if annealing_temp > 0.0 {
-        //     let ddg = delta_h - (annealing_temp + T_KELVIN) * delta_s;
-        //     let ka = ((-ddg) / (1.987 * (annealing_temp + T_KELVIN))).exp();
-        //     let bound = (1.0 / (1.0 + (1.0 / ((dna_nm / dna_sym_adj) * ka)).sqrt())) * 100.0;
+        // Calc bound, and return if asked
+        // match annealing_temp {
+        //     Some(temp) => {
+        //         let ddg = delta_h - (temp + T_KELVIN) * delta_s;
+        //         let ka = ((-ddg) / (1.987 * (temp + T_KELVIN))).exp();
+        //         let bound = (1.0 / (1.0 + (1.0 / ((dna_nm / dna_sym_adj) * ka)).sqrt())) * 100.0;
+        //         return bound;
+        //     }
+        //     None => {}
         // }
+
         tm
     }
 }
