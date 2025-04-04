@@ -16,7 +16,7 @@ pub mod seqio;
 pub mod tm;
 
 #[pyfunction]
-#[pyo3(signature = (msa_path, ncores, remap, findexes=None, rindexes=None, primer_len_min=None, primer_len_max=None, primer_gc_max=None, primer_gc_min=None, primer_tm_max=None, primer_tm_min=None, max_walk=None, max_homopolymers=None, min_freq=None, ignore_n=None, dimerscore=None))]
+#[pyo3(signature = (msa_path, ncores, remap, findexes=None, rindexes=None, primer_len_min=None, primer_len_max=None, primer_gc_max=None, primer_gc_min=None, primer_tm_max=None, primer_tm_min=None, max_walk=None, max_homopolymers=None, min_freq=None, ignore_n=None, dimerscore=None, use_annealing_temp= None))]
 fn digest_seq(
     msa_path: &str,
     ncores: usize,
@@ -35,6 +35,7 @@ fn digest_seq(
     min_freq: Option<f64>,
     ignore_n: Option<bool>,
     dimerscore: Option<f64>,
+    use_annealing_temp: Option<f64>,
 ) -> PyResult<(Vec<kmer::FKmer>, Vec<kmer::RKmer>, Vec<String>)> {
     // Start the spinner
     let spinner = ProgressBar::new_spinner();
@@ -90,16 +91,6 @@ fn digest_seq(
         let digested_f = digest::digest_f_primer(&seq_slice, &dconf, findexes);
         let digested_r = digest::digest_r_primer(&seq_slice, &dconf, rindexes);
 
-        for (i, res) in digested_f.iter().enumerate() {
-            match res {
-                Ok(_kmer) => {
-                    log_strs.push(format!("fprimer: {i} Pass"));
-                }
-                Err(e) => {
-                    log_strs.push(format!("fprimer: {i} {:?}", e));
-                }
-            }
-        }
         // Create the reverse digest
         // Start the spinner
         let spinner = ProgressBar::new_spinner();
