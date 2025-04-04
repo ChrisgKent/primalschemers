@@ -1,6 +1,6 @@
 [project]
 name = "primalschemers"
-version = "0.1.4"
+version = "0.1.5"
 description = "Rust code base for PrimalScheme3"
 readme = "README.md"
 authors = [
