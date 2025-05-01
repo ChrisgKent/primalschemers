@@ -1,5 +1,13 @@
-pub fn create_mapping_array(seq: &[u8]) -> Vec<Option<usize>> {
+pub fn create_mapping_array(seq: &[u8], remap: bool) -> Vec<Option<usize>> {
     let mut mapping_array: Vec<Option<usize>> = vec![None; seq.len()];
+
+    // Mapping array of just the index at each index
+    if !remap {
+        for i in 0..seq.len() {
+            mapping_array[i] = Some(i)
+        }
+        return mapping_array;
+    }
     let mut i = 0;
     for (index, base) in seq.iter().enumerate() {
         match base {
@@ -39,25 +47,25 @@ mod tests {
     #[test]
     fn test_create_mapping_array() {
         let seq = b"ACGT";
-        let mapping_array = create_mapping_array(seq);
+        let mapping_array = create_mapping_array(seq, true);
         assert_eq!(mapping_array, vec![Some(0), Some(1), Some(2), Some(3)]);
 
         let seq = b"AC-GT";
-        let mapping_array = create_mapping_array(seq);
+        let mapping_array = create_mapping_array(seq, true);
         assert_eq!(
             mapping_array,
             vec![Some(0), Some(1), None, Some(2), Some(3)]
         );
 
         let seq = b"-AC-GT-";
-        let mapping_array = create_mapping_array(seq);
+        let mapping_array = create_mapping_array(seq, true);
         assert_eq!(
             mapping_array,
             vec![None, Some(0), Some(1), None, Some(2), Some(3), None]
         );
 
         let seq = b" -AC-GT---";
-        let mapping_array = create_mapping_array(seq);
+        let mapping_array = create_mapping_array(seq, true);
         assert_eq!(
             mapping_array,
             vec![
@@ -76,19 +84,66 @@ mod tests {
     }
 
     #[test]
+    fn test_create_mapping_array_no_remap() {
+        let seq = b"ACGT";
+        let mapping_array = create_mapping_array(seq, false);
+        assert_eq!(mapping_array, vec![Some(0), Some(1), Some(2), Some(3)]);
+
+        let seq = b"AC-GT";
+        let mapping_array = create_mapping_array(seq, false);
+        assert_eq!(
+            mapping_array,
+            vec![Some(0), Some(1), Some(2), Some(3), Some(4)]
+        );
+
+        let seq = b"-AC-GT-";
+        let mapping_array = create_mapping_array(seq, false);
+        assert_eq!(
+            mapping_array,
+            vec![
+                Some(0),
+                Some(1),
+                Some(2),
+                Some(3),
+                Some(4),
+                Some(5),
+                Some(6)
+            ]
+        );
+
+        let seq = b" -AC-GT---";
+        let mapping_array = create_mapping_array(seq, false);
+        assert_eq!(
+            mapping_array,
+            vec![
+                Some(0),
+                Some(1),
+                Some(2),
+                Some(3),
+                Some(4),
+                Some(5),
+                Some(6),
+                Some(7),
+                Some(8),
+                Some(9)
+            ]
+        );
+    }
+
+    #[test]
     fn test_create_ref_to_msa() {
         let seq = b"ACGT";
-        let mapping_array = create_mapping_array(seq);
+        let mapping_array = create_mapping_array(seq, true);
         let ref_to_msa = create_ref_to_msa(&mapping_array);
         assert_eq!(ref_to_msa, vec![0, 1, 2, 3]);
 
         let seq = b"AC-GT";
-        let mapping_array = create_mapping_array(seq);
+        let mapping_array = create_mapping_array(seq, true);
         let ref_to_msa = create_ref_to_msa(&mapping_array);
         assert_eq!(ref_to_msa, vec![0, 1, 3, 4]);
 
         let seq = b"-AC-GT-A";
-        let mapping_array = create_mapping_array(seq);
+        let mapping_array = create_mapping_array(seq, true);
         let ref_to_msa = create_ref_to_msa(&mapping_array);
         assert_eq!(ref_to_msa, vec![1, 2, 4, 5, 7,]);
     }
@@ -102,7 +157,7 @@ mod tests {
             .copied()
             .collect::<Vec<u8>>();
 
-        let mapping_array = create_mapping_array(gap_seq);
+        let mapping_array = create_mapping_array(gap_seq, true);
         let ref_to_msa = create_ref_to_msa(&mapping_array);
 
         for (ref_i, &msa_i) in ref_to_msa.iter().enumerate() {

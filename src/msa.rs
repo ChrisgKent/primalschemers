@@ -56,7 +56,7 @@ impl MSA {
         // Remove end insertions
         let seq_array = seqio::remove_end_insertions(seq_array);
 
-        let mapping_array = mapping::create_mapping_array(&seqs[0].as_bytes());
+        let mapping_array = mapping::create_mapping_array(&seqs[0].as_bytes(), true);
         let ref_to_msa = mapping::create_ref_to_msa(&mapping_array);
 
         // Parse the headers

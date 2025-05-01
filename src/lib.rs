@@ -1,6 +1,6 @@
 use config::DigestConfig;
-use digest::IndexResult;
-use indicatif::ProgressBar;
+use digest::{DigestError, IndexResult};
+use indicatif::{ParallelProgressIterator, ProgressBar, ProgressStyle};
 use pyo3::prelude::*;
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use std::{collections::HashMap, time::Duration};
@@ -14,6 +14,347 @@ pub mod primaldimer;
 pub mod seqfuncs;
 pub mod seqio;
 pub mod tm;
+
+#[pyclass]
+struct DigestionCount {
+    pub count: f64,
+    pub result: DigestionResult,
+}
+#[pymethods]
+impl DigestionCount {
+    #[new]
+    fn new(count: f64, result: DigestionResult) -> Self {
+        DigestionCount { count, result }
+    }
+    #[getter]
+    pub fn count(&self) -> &f64 {
+        &self.count
+    }
+    #[getter]
+    pub fn result(&self) -> DigestionResult {
+        self.result.clone()
+    }
+}
+
+fn parse_count_map(count_map: HashMap<Result<Vec<u8>, DigestError>, f64>) -> Vec<DigestionCount> {
+    // Parses the result from *_to_count into a vec of DigestionCount
+    count_map
+        .into_iter()
+        .map(|(k, v)| match k {
+            Ok(seq) => DigestionCount::new(v, DigestionResult::Seq(seq)),
+            Err(de) => DigestionCount::new(v, DigestionResult::Error(de)),
+        })
+        .collect()
+}
+
+#[pyclass]
+#[derive(Clone)]
+enum DigestionResult {
+    Seq(Vec<u8>),
+    Error(DigestError),
+}
+#[pymethods]
+impl DigestionResult {
+    #[getter]
+    fn seq(&self) -> Option<&Vec<u8>> {
+        if let DigestionResult::Seq(seq) = &self {
+            return Some(seq);
+        };
+        return None;
+    }
+    #[getter]
+    fn error(&self) -> Option<DigestError> {
+        if let DigestionResult::Error(error) = &self {
+            return Some(error.clone());
+        };
+        return None;
+    }
+}
+
+#[pyclass]
+struct Digester {
+    msa_path: String,
+    ncores: usize,
+    remap: bool,
+
+    _seq_array: Vec<Vec<u8>>,
+    _mapping_array: Vec<Option<usize>>,
+    _ref_to_msa_array: Vec<usize>,
+    _thread_pool: rayon::ThreadPool,
+    _dconf: config::DigestConfig,
+}
+#[pymethods]
+impl Digester {
+    #[new]
+    #[pyo3(signature = (msa_path, ncores, remap, primer_len_min=None, primer_len_max=None, primer_gc_max=None, primer_gc_min=None, primer_tm_max=None, primer_tm_min=None, max_walk=None, max_homopolymers=None, min_freq=None, ignore_n=None, dimerscore=None, use_annealing_temp= None))]
+    fn new(
+        msa_path: &str,
+        ncores: usize,
+        remap: bool,
+        primer_len_min: Option<usize>,
+        primer_len_max: Option<usize>,
+        primer_gc_max: Option<f64>,
+        primer_gc_min: Option<f64>,
+        primer_tm_max: Option<f64>,
+        primer_tm_min: Option<f64>,
+        max_walk: Option<usize>,
+        max_homopolymers: Option<usize>,
+        min_freq: Option<f64>,
+        ignore_n: Option<bool>,
+        dimerscore: Option<f64>,
+        use_annealing_temp: Option<f64>,
+    ) -> Self {
+        // Build the thread pool
+        let _thread_pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(ncores)
+            .build()
+            .unwrap();
+
+        // Read in the MSA
+        let (_headers, seqs) = seqio::fasta_reader(&msa_path);
+
+        // parse the fasta to a seq array
+        let mut _seq_array = seqs
+            .iter()
+            .map(|s| s.as_bytes().to_vec())
+            .collect::<Vec<Vec<u8>>>();
+        _seq_array = seqio::remove_end_insertions(_seq_array);
+
+        // Create the mapping array
+        let _mapping_array: Vec<Option<usize>> =
+            mapping::create_mapping_array(&seqs[0].as_bytes(), remap);
+        let _ref_to_msa_array = mapping::create_ref_to_msa(&_mapping_array);
+
+        // create configa
+        let _dconf = DigestConfig::new(
+            primer_len_min,
+            primer_len_max,
+            primer_gc_max,
+            primer_gc_min,
+            primer_tm_max,
+            primer_tm_min,
+            max_walk,
+            max_homopolymers,
+            min_freq,
+            ignore_n,
+            dimerscore,
+        );
+
+        // Return the Digester
+        let msa_path = msa_path.to_string();
+        Digester {
+            msa_path,
+            ncores,
+            remap,
+            _seq_array,
+            _thread_pool,
+            _mapping_array,
+            _ref_to_msa_array,
+            _dconf,
+        }
+    }
+    fn create_seq_slice(&self) -> Vec<&[u8]> {
+        self._seq_array
+            .iter()
+            .map(|s| s.as_slice())
+            .collect::<Vec<&[u8]>>()
+    }
+    pub fn digest_f_to_count(
+        &self,
+        findexes: Option<Vec<usize>>,
+    ) -> Vec<(usize, Vec<DigestionCount>)> {
+        let seq_slice = self.create_seq_slice();
+
+        let kmers: Vec<(usize, Vec<DigestionCount>)> = self._thread_pool.install(|| {
+            let indexes: Vec<usize> = match findexes {
+                // Could add checks
+                Some(i) => i,
+                None => (0..self._seq_array[0].len() + 1).collect(),
+            };
+
+            let progress_bar = ProgressBar::new(indexes.len() as u64);
+            progress_bar.set_message("fprimer digestion");
+            progress_bar.set_style(
+                ProgressStyle::default_bar()
+                    .template("{msg} [{elapsed}] {wide_bar:.cyan/blue} {pos:>7}/{len:7} {eta}")
+                    .unwrap(),
+            );
+
+            let counts = indexes
+                .into_par_iter()
+                .map(|fi| {
+                    (
+                        fi,
+                        parse_count_map(digest::digest_f_to_count(&seq_slice, fi, &self._dconf)),
+                    )
+                })
+                .collect();
+
+            counts
+        });
+        kmers
+    }
+    pub fn digest_r_to_count(
+        &self,
+        findexes: Option<Vec<usize>>,
+    ) -> Vec<(usize, Vec<DigestionCount>)> {
+        let seq_slice = self.create_seq_slice();
+
+        let kmers: Vec<(usize, Vec<DigestionCount>)> = self._thread_pool.install(|| {
+            let indexes: Vec<usize> = match findexes {
+                // Could add checks
+                Some(i) => i,
+                None => (0..self._seq_array[0].len() + 1).collect(),
+            };
+
+            let progress_bar = ProgressBar::new(indexes.len() as u64);
+            progress_bar.set_message("rprimer digestion");
+            progress_bar.set_style(
+                ProgressStyle::default_bar()
+                    .template("{msg} [{elapsed}] {wide_bar:.cyan/blue} {pos:>7}/{len:7} {eta}")
+                    .unwrap(),
+            );
+
+            let counts = indexes
+                .into_par_iter()
+                .progress_with(progress_bar)
+                .map(|fi| {
+                    (
+                        fi,
+                        parse_count_map(digest::digest_r_to_count(&seq_slice, fi, &self._dconf)),
+                    )
+                })
+                .collect();
+
+            counts
+        });
+        kmers
+    }
+    pub fn digest_to_count(&self, findexes: Option<Vec<usize>>, rindexes: Option<Vec<usize>>) {
+        // Create the seq slice
+        let seq_slice = self.create_seq_slice();
+
+        self._thread_pool.install(|| {});
+    }
+    #[pyo3(signature = (findexes=None, rindexes=None))]
+    pub fn digest(
+        &self,
+        findexes: Option<Vec<usize>>,
+        rindexes: Option<Vec<usize>>,
+    ) -> PyResult<(Vec<kmer::FKmer>, Vec<kmer::RKmer>, Vec<String>)> {
+        {
+            let seq_slice = self.create_seq_slice();
+
+            let mut log_strs = Vec::new();
+
+            self._thread_pool.install(|| {
+                // Create the digest
+                let digested_f = digest::digest_f_primer(&seq_slice, &self._dconf, findexes);
+                let digested_r = digest::digest_r_primer(&seq_slice, &self._dconf, rindexes);
+
+                // Start the spinner
+                let spinner = ProgressBar::new_spinner();
+                spinner.set_message("Processing Kmers");
+                spinner.enable_steady_tick(Duration::from_millis(100));
+
+                // Count the errors stats
+                let mut fp_count: HashMap<&IndexResult, usize> = HashMap::new();
+                for res in digested_f.iter() {
+                    match res {
+                        Ok(_) => {
+                            let count = fp_count.entry(&IndexResult::Pass()).or_insert(0);
+                            *count += 1;
+                        }
+                        Err(e) => {
+                            let count = fp_count.entry(e).or_insert(0);
+                            *count += 1;
+                        }
+                    }
+                }
+                let mut rp_count: HashMap<&IndexResult, usize> = HashMap::new();
+                for res in digested_r.iter() {
+                    match res {
+                        Ok(_) => {
+                            let count = rp_count.entry(&IndexResult::Pass()).or_insert(0);
+                            *count += 1;
+                        }
+                        Err(e) => {
+                            let count = rp_count.entry(e).or_insert(0);
+                            *count += 1;
+                        }
+                    }
+                }
+
+                // Sort values and push to log string vec
+                let mut values = fp_count.into_iter().collect::<Vec<(&IndexResult, usize)>>();
+                values.sort_by(|a, b| b.1.cmp(&a.1));
+                log_strs.push(format!("fprimer status:{:?}", values));
+                let mut values = rp_count.into_iter().collect::<Vec<(&IndexResult, usize)>>();
+                values.sort_by(|a, b| b.1.cmp(&a.1));
+                log_strs.push(format!("rprimer status:{:?}", values));
+
+                let fkmers: Vec<kmer::FKmer> =
+                    digested_f.into_par_iter().filter_map(Result::ok).collect();
+                let rkmers: Vec<kmer::RKmer> =
+                    digested_r.into_par_iter().filter_map(Result::ok).collect();
+
+                // Remap the kmers
+                if self.remap {
+                    let mut rm_fk: Vec<kmer::FKmer> = Vec::with_capacity(fkmers.len());
+                    for mut fk in fkmers.into_iter() {
+                        // Check for being on last base
+                        if fk.end() == self._mapping_array.len() {
+                            match self._mapping_array[fk.end() - 1] {
+                                Some(i) => {
+                                    fk.remap(i + 1);
+                                    rm_fk.push(fk);
+                                }
+                                None => {}
+                            }
+                        } else {
+                            match self._mapping_array[fk.end()] {
+                                Some(i) => {
+                                    fk.remap(i);
+                                    rm_fk.push(fk);
+                                }
+                                None => {}
+                            }
+                        }
+                    }
+
+                    let mut rm_rk: Vec<kmer::RKmer> = Vec::with_capacity(rkmers.len());
+                    for mut rk in rkmers.into_iter() {
+                        match self._mapping_array[rk.start()] {
+                            Some(i) => {
+                                rk.remap(i);
+                                rm_rk.push(rk);
+                            }
+                            None => {}
+                        }
+                    }
+
+                    spinner.finish_and_clear();
+                    return Ok((rm_fk, rm_rk, log_strs));
+                } else {
+                    spinner.finish_and_clear();
+                    return Ok((fkmers, rkmers, log_strs));
+                }
+            })
+        }
+    }
+    #[getter]
+    fn _seq_array(&self) -> &Vec<Vec<u8>> {
+        &self._seq_array
+    }
+    #[getter]
+    fn _mapping_array(&self) -> &Vec<Option<usize>> {
+        &self._mapping_array
+    }
+    #[getter]
+    fn _ref_to_msa_array(&self) -> &Vec<usize> {
+        &self._ref_to_msa_array
+    }
+}
 
 #[pyfunction]
 #[pyo3(signature = (msa_path, ncores, remap, findexes=None, rindexes=None, primer_len_min=None, primer_len_max=None, primer_gc_max=None, primer_gc_min=None, primer_tm_max=None, primer_tm_min=None, max_walk=None, max_homopolymers=None, min_freq=None, ignore_n=None, dimerscore=None, use_annealing_temp= None))]
@@ -78,7 +419,7 @@ fn digest_seq(
         let seq_array = seqio::remove_end_insertions(seq_array);
 
         // Create the mapping array
-        let mapping_array = mapping::create_mapping_array(&seqs[0].as_bytes());
+        let mapping_array = mapping::create_mapping_array(&seqs[0].as_bytes(), remap);
 
         // Create slices
         let seq_slice = seq_array
@@ -222,10 +563,33 @@ fn do_pool_interact(seqs1: Vec<Vec<u8>>, seqs2: Vec<Vec<u8>>, t: f64) -> bool {
     false
 }
 
+#[pyfunction]
+fn calc_at_offset(seq1: &str, seq2: &str, offset: i32) -> f64 {
+    //Provide strings in 5'-3'
+    // This will return the score for this offset
+    let seq1: Vec<u8> = seq1.as_bytes().to_vec();
+    let mut seq2 = seq2.as_bytes().to_vec();
+    seq2.reverse();
+
+    match primaldimer::calc_at_offset(&seq1, &seq2, offset) {
+        Some(score) => return score,
+        None => return 100.,
+    };
+}
+
 #[pymodule]
 fn _core(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
+    // Object classes
     m.add_class::<kmer::FKmer>()?;
     m.add_class::<kmer::RKmer>()?;
+    m.add_class::<Digester>()?;
+
+    // Return types
+    m.add_class::<DigestionCount>()?;
+    m.add_class::<DigestError>()?;
+    m.add_class::<DigestionResult>()?;
+
+    // Functions
     m.add_function(wrap_pyfunction!(digest_seq, m)?)?;
     m.add_function(wrap_pyfunction!(do_seqs_interact, m)?)?;
     m.add_function(wrap_pyfunction!(do_pool_interact, m)?)?;

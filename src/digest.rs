@@ -6,12 +6,14 @@ use crate::seqfuncs::{
 };
 use crate::{primaldimer, tm};
 
+use pyo3::prelude::*;
 use std::collections::HashMap;
 
 use indicatif::{ParallelProgressIterator, ProgressBar, ProgressStyle};
 use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 
 #[derive(Eq, PartialEq, Hash, Debug, Clone)]
+#[pyclass]
 pub enum DigestError {
     InvalidBase,
     WalkedOutLeft,
@@ -76,13 +78,6 @@ impl DigestionKmers {
         &self.status
     }
     pub fn sequence(&self) -> &Option<Vec<u8>> {
-        &self.seq
-    }
-    fn rc(&mut self) -> &Option<Vec<u8>> {
-        self.seq = match &self.seq {
-            Some(seq) => Some(seq.iter().map(|b| complement_base(*b)).rev().collect()),
-            None => None,
-        };
         &self.seq
     }
 }
@@ -316,8 +311,18 @@ pub fn digest_r_to_count(
             }
         }
     }
+    // Rc the kmers
+    let mut rc_kmer_count: HashMap<Result<Vec<u8>, DigestError>, f64> = HashMap::new();
 
-    kmer_count
+    for (k, v) in kmer_count.into_iter() {
+        let r = match k {
+            Ok(seq) => Ok(reverse_complement(&seq)),
+            Err(e) => Err(e),
+        };
+        rc_kmer_count.insert(r, v);
+    }
+
+    rc_kmer_count
 }
 
 pub fn digest_r_at_index(
@@ -330,11 +335,6 @@ pub fn digest_r_at_index(
 
     // Process the results
     let mut dks = process_seqs(kmer_count, dconf);
-
-    // Reverse complement the sequences
-    for dk in dks.iter_mut() {
-        dk.rc();
-    }
 
     for dk in dks.iter() {
         match &dk.status {
@@ -401,11 +401,6 @@ pub fn digest_r_dk(seq_array: &Vec<&[u8]>, dconf: &DigestConfig) -> Vec<Vec<Dige
 
             // Process the results
             let mut dks = process_seqs(kmer_count, dconf);
-
-            // Reverse complement the sequences
-            for dk in dks.iter_mut() {
-                dk.rc();
-            }
             dks
         })
         .collect();
@@ -522,6 +517,11 @@ pub fn digest_f_to_count(
         kmer_count.insert(Err(DigestError::WalkedOutLeft), seqs.len() as f64);
         return kmer_count;
     }
+    if index > seqs[0].len() {
+        kmer_count.insert(Err(DigestError::WalkedOutRight), seqs.len() as f64);
+        return kmer_count;
+    }
+
     let lhs = index - dconf.primer_len_min;
 
     if index == 0 {
@@ -762,7 +762,7 @@ mod tests {
 
         // Check sequence
         let exp_seq: Result<Vec<u8>, DigestError> =
-            Ok("ACCAACCAACTTTCGATCTCTTGTAGA".as_bytes().to_vec());
+            Ok("TCTACAAGAGATCGAAAGTTGGTTGGT".as_bytes().to_vec());
 
         // Check sequence
         for key in digested.keys() {
