@@ -1,4 +1,4 @@
-use config::DigestConfig;
+use config::{DigestConfig, ThermoType};
 use digest::{DigestError, IndexResult};
 use indicatif::{ParallelProgressIterator, ProgressBar, ProgressStyle};
 use pyo3::prelude::*;
@@ -9,7 +9,6 @@ pub mod config;
 pub mod digest;
 pub mod kmer;
 pub mod mapping;
-pub mod msa;
 pub mod primaldimer;
 pub mod seqfuncs;
 pub mod seqio;
@@ -86,7 +85,7 @@ struct Digester {
 #[pymethods]
 impl Digester {
     #[new]
-    #[pyo3(signature = (msa_path, ncores, remap, primer_len_min=None, primer_len_max=None, primer_gc_max=None, primer_gc_min=None, primer_tm_max=None, primer_tm_min=None, max_walk=None, max_homopolymers=None, min_freq=None, ignore_n=None, dimerscore=None, use_annealing_temp= None))]
+    #[pyo3(signature = (msa_path, ncores, remap, primer_len_min=None, primer_len_max=None, primer_gc_max=None, primer_gc_min=None, primer_tm_max=None, primer_tm_min=None, primer_annealing_prop= None, annealing_temp_c=None, max_walk=None, max_homopolymers=None, min_freq=None, ignore_n=None, dimerscore=None))]
     fn new(
         msa_path: &str,
         ncores: usize,
@@ -97,12 +96,13 @@ impl Digester {
         primer_gc_min: Option<f64>,
         primer_tm_max: Option<f64>,
         primer_tm_min: Option<f64>,
+        primer_annealing_prop: Option<f64>,
+        annealing_temp_c: Option<f64>,
         max_walk: Option<usize>,
         max_homopolymers: Option<usize>,
         min_freq: Option<f64>,
         ignore_n: Option<bool>,
         dimerscore: Option<f64>,
-        use_annealing_temp: Option<f64>,
     ) -> Self {
         // Build the thread pool
         let _thread_pool = rayon::ThreadPoolBuilder::new()
@@ -125,7 +125,13 @@ impl Digester {
             mapping::create_mapping_array(&seqs[0].as_bytes(), remap);
         let _ref_to_msa_array = mapping::create_ref_to_msa(&_mapping_array);
 
-        // create configa
+        // If both annealing are set use annealing
+        let thermo_type = match (primer_annealing_prop, annealing_temp_c) {
+            (Some(_), Some(_)) => ThermoType::ANNEALING,
+            _ => ThermoType::TM,
+        };
+
+        // create config
         let _dconf = DigestConfig::new(
             primer_len_min,
             primer_len_max,
@@ -133,6 +139,9 @@ impl Digester {
             primer_gc_min,
             primer_tm_max,
             primer_tm_min,
+            primer_annealing_prop,
+            annealing_temp_c,
+            Some(thermo_type),
             max_walk,
             max_homopolymers,
             min_freq,
@@ -357,7 +366,7 @@ impl Digester {
 }
 
 #[pyfunction]
-#[pyo3(signature = (msa_path, ncores, remap, findexes=None, rindexes=None, primer_len_min=None, primer_len_max=None, primer_gc_max=None, primer_gc_min=None, primer_tm_max=None, primer_tm_min=None, max_walk=None, max_homopolymers=None, min_freq=None, ignore_n=None, dimerscore=None, use_annealing_temp= None))]
+#[pyo3(signature = (msa_path, ncores, remap, findexes=None, rindexes=None, primer_len_min=None, primer_len_max=None, primer_gc_max=None, primer_gc_min=None, primer_tm_max=None, primer_tm_min=None, primer_annealing_prop=None, annealing_temp_c=None, max_walk=None, max_homopolymers=None, min_freq=None, ignore_n=None, dimerscore=None))]
 fn digest_seq(
     msa_path: &str,
     ncores: usize,
@@ -369,19 +378,29 @@ fn digest_seq(
     primer_len_max: Option<usize>,
     primer_gc_max: Option<f64>,
     primer_gc_min: Option<f64>,
+    // tm
     primer_tm_max: Option<f64>,
     primer_tm_min: Option<f64>,
+    // annealing
+    primer_annealing_prop: Option<f64>,
+    annealing_temp_c: Option<f64>,
+
     max_walk: Option<usize>,
     max_homopolymers: Option<usize>,
     min_freq: Option<f64>,
     ignore_n: Option<bool>,
     dimerscore: Option<f64>,
-    use_annealing_temp: Option<f64>,
 ) -> PyResult<(Vec<kmer::FKmer>, Vec<kmer::RKmer>, Vec<String>)> {
     // Start the spinner
     let spinner = ProgressBar::new_spinner();
     spinner.set_message("Parsing MSA");
     spinner.enable_steady_tick(Duration::from_millis(100));
+
+    // If both annealing are set use annealing
+    let thermo_type = match (primer_annealing_prop, annealing_temp_c) {
+        (Some(_), Some(_)) => ThermoType::ANNEALING,
+        _ => ThermoType::TM,
+    };
 
     // Create config
     let dconf = DigestConfig::new(
@@ -391,6 +410,9 @@ fn digest_seq(
         primer_gc_min,
         primer_tm_max,
         primer_tm_min,
+        primer_annealing_prop,
+        annealing_temp_c,
+        Some(thermo_type),
         max_walk,
         max_homopolymers,
         min_freq,

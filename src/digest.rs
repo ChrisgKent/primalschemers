@@ -1,4 +1,4 @@
-use crate::config::DigestConfig;
+use crate::config::{DigestConfig, ThermoType};
 use crate::kmer::{FKmer, RKmer};
 use crate::seqfuncs::{
     check_kmer, complement_base, expand_amb_base, expand_amb_sequence, gc_content, max_homopolymer,
@@ -11,6 +11,11 @@ use std::collections::HashMap;
 
 use indicatif::{ParallelProgressIterator, ProgressBar, ProgressStyle};
 use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
+
+static DNA_NM: f64 = 15.0;
+static K_MM: f64 = 100.0;
+static DIVALENT_CONC: f64 = 2.0;
+static DNTP_CONC: f64 = 0.8;
 
 #[derive(Eq, PartialEq, Hash, Debug, Clone)]
 #[pyclass]
@@ -36,6 +41,7 @@ pub enum ThermoResult {
     HighTm,
     LowTm,
     PrimerDimer,
+    LowAnnealing,
 }
 
 #[derive(Eq, PartialEq, Hash, Debug, Clone)]
@@ -97,25 +103,45 @@ fn thermo_check(kmer: &[u8], dconf: &DigestConfig) -> ThermoResult {
         return ThermoResult::Homopolymer;
     }
 
-    // Check hairpin
-    // Check Tm
-    let (tm, _an) = tm::oligotm_utf8(
-        kmer,
-        15.0,
-        100.0,
-        2.0,
-        0.8,
-        0.0,
-        0.0,
-        0.8,
-        0.0,
-        tm::TmMethod::SantaLucia2004,
-    );
-    if tm >= dconf.primer_tm_max {
-        return ThermoResult::HighTm;
-    }
-    if tm < dconf.primer_tm_min {
-        return ThermoResult::LowTm;
+    // Check Tm if using TM Method
+
+    match dconf.thermo_type {
+        ThermoType::TM => {
+            let tm = tm::oligo_tm_utf8(
+                kmer,
+                DNA_NM,
+                K_MM,
+                DIVALENT_CONC,
+                DNTP_CONC,
+                0.0,
+                0.0,
+                0.8,
+                tm::TmMethod::SantaLucia2004,
+            );
+            if tm >= dconf.primer_tm_max {
+                return ThermoResult::HighTm;
+            }
+            if tm < dconf.primer_tm_min {
+                return ThermoResult::LowTm;
+            }
+        }
+        ThermoType::ANNEALING => {
+            let prop = tm::oligo_annealing_utf8(
+                kmer,
+                DNA_NM,
+                K_MM,
+                DIVALENT_CONC,
+                DNTP_CONC,
+                0.0,
+                0.0,
+                0.8,
+                dconf.annealing_temp_c,
+                tm::TmMethod::SantaLucia2004,
+            );
+            if prop < dconf.primer_annealing_prop {
+                return ThermoResult::LowAnnealing;
+            }
+        }
     }
 
     //TODO calc hairpin
@@ -158,10 +184,27 @@ pub fn walk_right(
     dconf: &DigestConfig,
 ) -> Vec<Result<Vec<u8>, DigestError>> {
     // Check tm
-    let tm = kmer.calc_tm(15.0, 100.0, 2.0, 0.8, 0.0, 0.0, 0.8);
 
-    if tm >= dconf.primer_tm_min {
-        return vec![Ok(kmer.seq)];
+    match dconf.thermo_type {
+        ThermoType::TM => {
+            if kmer.calc_tm(DNA_NM, K_MM, DIVALENT_CONC, DNTP_CONC, 0.0, 0.0, 0.8)
+                >= dconf.primer_tm_min
+            {
+                return vec![Ok(kmer.seq)];
+            }
+        }
+        ThermoType::ANNEALING => {
+            if kmer.calc_annealing(
+                dconf.annealing_temp_c,
+                DNA_NM,
+                K_MM,
+                DIVALENT_CONC,
+                DNTP_CONC,
+            ) >= dconf.primer_annealing_prop
+            {
+                return vec![Ok(kmer.seq)];
+            }
+        }
     }
 
     // Check len
@@ -334,7 +377,7 @@ pub fn digest_r_at_index(
         digest_r_to_count(seqs, index, dconf);
 
     // Process the results
-    let mut dks = process_seqs(kmer_count, dconf);
+    let dks = process_seqs(kmer_count, dconf);
 
     for dk in dks.iter() {
         match &dk.status {
@@ -400,7 +443,7 @@ pub fn digest_r_dk(seq_array: &Vec<&[u8]>, dconf: &DigestConfig) -> Vec<Vec<Dige
                 digest_r_to_count(seq_array, *i, dconf);
 
             // Process the results
-            let mut dks = process_seqs(kmer_count, dconf);
+            let dks = process_seqs(kmer_count, dconf);
             dks
         })
         .collect();
@@ -452,10 +495,26 @@ pub fn walk_left(
     dconf: &DigestConfig,
 ) -> Vec<Result<Vec<u8>, DigestError>> {
     // Check tm
-    let tm = kmer.calc_tm(15.0, 100.0, 2.0, 0.8, 0.0, 0.0, 0.8);
-
-    if tm >= dconf.primer_tm_min {
-        return vec![Ok(kmer.seq)];
+    match dconf.thermo_type {
+        ThermoType::TM => {
+            if kmer.calc_tm(DNA_NM, K_MM, DIVALENT_CONC, DNTP_CONC, 0.0, 0.0, 0.8)
+                >= dconf.primer_tm_min
+            {
+                return vec![Ok(kmer.seq)];
+            }
+        }
+        ThermoType::ANNEALING => {
+            if kmer.calc_annealing(
+                dconf.annealing_temp_c,
+                DNA_NM,
+                K_MM,
+                DIVALENT_CONC,
+                DNTP_CONC,
+            ) >= dconf.primer_annealing_prop
+            {
+                return vec![Ok(kmer.seq)];
+            }
+        }
     }
 
     // Check len
@@ -752,7 +811,7 @@ mod tests {
     #[test]
     fn test_digest_r_to_count() {
         let dconf = DigestConfig::new(
-            None, None, None, None, None, None, None, None, None, None, None,
+            None, None, None, None, None, None, None, None, None, None, None, None, None, None,
         );
         let seqs = vec!["ATTAAAGGTTTATACCTTCCCAGGTAACAAACCAACCAACTTTCGATCTCTTGTAGATCT".as_bytes()];
 
@@ -785,8 +844,11 @@ mod tests {
         let dconf = DigestConfig::new(
             None,
             None,
-            Some(0.8),
-            Some(0.2),
+            None,
+            Some(0.3),
+            None,
+            None,
+            None,
             None,
             None,
             None,
@@ -821,7 +883,7 @@ mod tests {
     #[test]
     fn test_digest_r_to_count_ambs() {
         let dconf = DigestConfig::new(
-            None, None, None, None, None, None, None, None, None, None, None,
+            None, None, None, None, None, None, None, None, None, None, None, None, None, None,
         );
         let seqs = vec!["ATTAAAGGTTTATACCTTCCCAGGTAACAAACCAACCAACTTTRCGATCTCTTGTAGATCT".as_bytes()];
 
@@ -848,7 +910,7 @@ mod tests {
     #[test]
     fn test_digest_f_to_count() {
         let dconf = DigestConfig::new(
-            None, None, None, None, None, None, None, None, None, None, None,
+            None, None, None, None, None, None, None, None, None, None, None, None, None, None,
         );
         let seqs = vec!["ATTAAAGGTTTATACCTTCCCAGGTAACAAACCAACCAACTTTCGATCTCTTGTAGATCT".as_bytes()];
 
@@ -868,7 +930,7 @@ mod tests {
     #[test]
     fn test_digest_f_to_count_ps3() {
         let dconf = DigestConfig::new(
-            None, None, None, None, None, None, None, None, None, None, None,
+            None, None, None, None, None, None, None, None, None, None, None, None, None, None,
         );
         let seqs =
             vec!["CCAATGGTGCAAAAGGTATAATCATTAATGTCCAATGGTGCAAAAGGTATAATCATTAATGT".as_bytes()];
@@ -888,7 +950,7 @@ mod tests {
     #[test]
     fn test_digest_f_to_count_gap() {
         let dconf = DigestConfig::new(
-            None, None, None, None, None, None, None, None, None, None, None,
+            None, None, None, None, None, None, None, None, None, None, None, None, None, None,
         );
         let seqs = vec!["ATTAAAGGTTTATACCTTCCCAGGTAACAAACCAACCAA-TTTCGATCTCTTGTAGATCT".as_bytes()];
 
@@ -902,7 +964,7 @@ mod tests {
     #[test]
     fn test_digest_f_to_count_ambs() {
         let dconf = DigestConfig::new(
-            None, None, None, None, None, None, None, None, None, None, None,
+            None, None, None, None, None, None, None, None, None, None, None, None, None, None,
         );
         let seqs = vec!["ATTAAAGGTTTATACCTTCCCAGGTAACAAACCAACCAARTTTCGATCTCTTGTAGATCT".as_bytes()];
 
@@ -937,7 +999,7 @@ mod tests {
     #[test]
     fn test_digest_f_to_count_ambs_extend() {
         let dconf = DigestConfig::new(
-            None, None, None, None, None, None, None, None, None, None, None,
+            None, None, None, None, None, None, None, None, None, None, None, None, None, None,
         );
         let seqs = vec!["ATTAAAGGTTTATACCTTCCCAGGTAACAAACCAACCRARTTTCGATCTCTTGTAGATCT".as_bytes()];
         // Check that appending amb bases works as expected
@@ -954,7 +1016,7 @@ mod tests {
     #[test]
     fn test_digest_f_to_count_wl() {
         let dconf = DigestConfig::new(
-            None, None, None, None, None, None, None, None, None, None, None,
+            None, None, None, None, None, None, None, None, None, None, None, None, None, None,
         );
         let seqs = vec!["ATTAAAGGTTTATACCTTCCCAGGTAACAAACCAACCAA-TTTCGATCTCTTGTAGATCT".as_bytes()];
 
@@ -971,7 +1033,7 @@ mod tests {
     #[test]
     fn test_digest_f_to_count_contains_n() {
         let dconf = DigestConfig::new(
-            None, None, None, None, None, None, None, None, None, None, None,
+            None, None, None, None, None, None, None, None, None, None, None, None, None, None,
         );
         let seqs = vec!["ATTAAAGGTTTATACCTTCCCAGGTAACAAACCAACCAANTTTCGATCTCTTGTAGATCT".as_bytes()];
 
@@ -984,7 +1046,7 @@ mod tests {
     #[test]
     fn test_digest_f_to_count_invalid_base() {
         let dconf = DigestConfig::new(
-            None, None, None, None, None, None, None, None, None, None, None,
+            None, None, None, None, None, None, None, None, None, None, None, None, None, None,
         );
         let seqs = vec!["ATTAAAGGTTTATACCTTCCCAGGTAACAAACCAACCAA!TTTCGATCTCTTGTAGATCT".as_bytes()];
 

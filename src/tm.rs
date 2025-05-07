@@ -71,13 +71,7 @@ fn santa_lucia_1998_ds(nn: &[u8; 2]) -> i32 {
             b'T' => 222,
             _ => 227,
         },
-        _ => match nn[1] {
-            b'A' => 168,
-            b'C' => 210,
-            b'G' => 220,
-            b'T' => 215,
-            _ => 220,
-        },
+        _ => 0,
     }
 }
 
@@ -112,13 +106,7 @@ fn santa_lucia_1998_dh(nn: &[u8; 2]) -> i32 {
             b'T' => 79,
             _ => 0,
         },
-        _ => match nn[1] {
-            b'A' => 72,
-            b'C' => 80,
-            b'G' => 78,
-            b'T' => 72,
-            _ => 0,
-        },
+        _ => 0,
     }
 }
 
@@ -152,13 +140,7 @@ fn santa_lucia_2004_ds(nn: &[u8; 2]) -> i32 {
             b'T' => 213,
             _ => 0,
         },
-        _ => match nn[1] {
-            b'A' => 168,
-            b'C' => 210,
-            b'G' => 220,
-            b'T' => 215,
-            _ => 0,
-        },
+        _ => 0,
     }
 }
 
@@ -192,13 +174,7 @@ fn santa_lucia_2004_dh(nn: &[u8; 2]) -> i32 {
             b'T' => 76,
             _ => 0,
         },
-        _ => match nn[1] {
-            b'A' => 72,
-            b'C' => 80,
-            b'G' => 78,
-            b'T' => 72,
-            _ => 0,
-        },
+        _ => 0,
     }
 }
 
@@ -337,6 +313,67 @@ impl Oligo {
 
         tm
     }
+
+    pub fn calc_annealing(
+        &self,
+        annealing_temp: f64,
+        dna_nm: f64,
+        k_mm: f64,
+        divalent_conc: f64,
+        dntp_conc: f64,
+    ) -> f64 {
+        //
+        let di_to_mo = divalent_to_monovalent(divalent_conc, dntp_conc).unwrap();
+        let sym = symmetry_utf8(&self.seq);
+
+        // SantaLucia2004
+        let mut ds = 57;
+        let mut dh = -2;
+
+        if sym {
+            ds += 14;
+        }
+        // Terminal penalty
+        match self.seq[0] {
+            b'A' | b'T' => {
+                ds += -69;
+                dh += -22;
+            }
+            _ => {}
+        }
+
+        // Sum the arrays
+        ds += self.ds_array.iter().sum::<i32>();
+        dh += self.dh_array.iter().sum::<i32>();
+
+        // End Terminal Pen
+        match self.seq[self.seq.len() - 1] {
+            b'A' | b'T' => {
+                ds += -69;
+                dh += -22;
+            }
+            _ => {}
+        }
+
+        // Convert
+        let delta_h = dh as f64 * -100.0;
+        let mut delta_s = ds as f64 * -0.1;
+
+        // Salt correction using santalucia
+        let adj_k_mm = k_mm + di_to_mo;
+        delta_s += 0.368 * ((self.seq.len() - 1) as f64) * (adj_k_mm / 1000.0).ln();
+
+        let dna_sym_adj = match sym {
+            true => 1000000000.0,
+            false => 4000000000.0,
+        };
+
+        let ddg = delta_h - (annealing_temp + T_KELVIN) * delta_s;
+        let ka = ((-ddg) / (1.987 * (annealing_temp + T_KELVIN))).exp();
+        let bound = (1.0 / (1.0 + (1.0 / ((dna_nm / dna_sym_adj) * ka)).sqrt())) * 100.0;
+
+        bound
+    }
 }
 
 fn divalent_to_monovalent(divalent: f64, dntp: f64) -> Result<f64, &'static str> {
@@ -396,7 +433,7 @@ fn symmetry(seq: &Vec<usize>) -> bool {
     true
 }
 
-pub fn oligotm(
+pub fn oligo_thermo(
     seq_array: &[u8],
     dna_nm: f64,
     k_mm: f64,
@@ -544,7 +581,33 @@ fn _encode_base(b: u8) -> usize {
     }
 }
 
-pub fn oligotm_utf8(
+pub fn oligo_tm_utf8(
+    sequence: &[u8],
+    dna_nm: f64,
+    k_mm: f64,
+    divalent_conc: f64,
+    dntp_conc: f64,
+    dmso_conc: f64,
+    dmso_fact: f64,
+    formamide_conc: f64,
+    tm_method: TmMethod,
+) -> f64 {
+    oligo_thermo(
+        sequence,
+        dna_nm,
+        k_mm,
+        divalent_conc,
+        dntp_conc,
+        dmso_conc,
+        dmso_fact,
+        formamide_conc,
+        -10.0,
+        tm_method,
+    )
+    .0
+}
+
+pub fn oligo_annealing_utf8(
     sequence: &[u8],
     dna_nm: f64,
     k_mm: f64,
@@ -555,8 +618,8 @@ pub fn oligotm_utf8(
     formamide_conc: f64,
     annealing_temp: f64,
     tm_method: TmMethod,
-) -> (f64, f64) {
-    oligotm(
+) -> f64 {
+    oligo_thermo(
         sequence,
         dna_nm,
         k_mm,
@@ -568,6 +631,7 @@ pub fn oligotm_utf8(
         annealing_temp,
         tm_method,
     )
+    .1
 }
 
 #[cfg(test)]
@@ -578,8 +642,8 @@ mod tests {
 
     #[test]
     fn test_sl_1998_ds() {
-        for n1 in [b'A', b'C', b'G', b'T', b'N'].iter() {
-            for n2 in [b'A', b'C', b'G', b'T', b'N'].iter() {
+        for n1 in [b'A', b'C', b'G', b'T'].iter() {
+            for n2 in [b'A', b'C', b'G', b'T'].iter() {
                 let nn = [*n1 as u8, *n2 as u8];
                 let r = santa_lucia_1998_ds(&nn);
                 let q = SANTA_LUCIA_1998_DS[_encode_base(nn[0])][_encode_base(nn[1])];
@@ -646,7 +710,7 @@ mod tests {
         let seq = "TCATTGTATCCTCACATAACTCTCCCAAA".as_bytes();
 
         let oligo = Oligo::new(seq.to_vec());
-        let (tm, _bound) = oligotm(
+        let tm = oligo_tm_utf8(
             &seq,
             15.0,
             100.0,
@@ -655,7 +719,6 @@ mod tests {
             0.0,
             0.0,
             0.8,
-            0.0,
             TmMethod::SantaLucia2004,
         );
 
@@ -665,7 +728,7 @@ mod tests {
     #[test]
     fn test_oligo_tm_rev() {
         let kmer = "TCATTGTATCCTCACATAACTCTCCCAAA".as_bytes().to_vec();
-        let tm = oligotm_utf8(
+        let tm = oligo_tm_utf8(
             &kmer,
             15.0,
             100.0,
@@ -674,12 +737,11 @@ mod tests {
             0.0,
             0.0,
             0.8,
-            0.0,
             TmMethod::SantaLucia2004,
         );
 
         let rc_kmer = reverse_complement(&kmer);
-        let tm_rev = oligotm_utf8(
+        let tm_rev = oligo_tm_utf8(
             &rc_kmer,
             15.0,
             100.0,
@@ -688,7 +750,6 @@ mod tests {
             0.0,
             0.0,
             0.8,
-            0.0,
             TmMethod::SantaLucia2004,
         );
 

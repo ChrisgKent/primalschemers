@@ -76,7 +76,7 @@ pub fn contains_ambs(kmer: &[u8]) -> bool {
 pub fn is_amb(base: &u8) -> bool {
     matches!(
         base,
-        b'R' | b'Y' | b'S' | b'W' | b'K' | b'M' | b'D' | b'H' | b'V'
+        b'R' | b'Y' | b'S' | b'W' | b'K' | b'M' | b'D' | b'H' | b'V' | b'B'
     )
 }
 
@@ -127,6 +127,7 @@ pub fn expand_amb_base(amb: u8) -> Option<Vec<u8>> {
         b'D' => Some(vec![b'A', b'G', b'T']),
         b'H' => Some(vec![b'A', b'C', b'T']),
         b'V' => Some(vec![b'A', b'C', b'G']),
+        b'B' => Some(vec![b'C', b'G', b'T']),
         // b'N' => Some(vec![b'A', b'C', b'G', b'T']),
         b'A' => Some(vec![b'A']),
         b'C' => Some(vec![b'C']),
@@ -186,6 +187,8 @@ mod tests {
         assert_eq!(expand_amb_base(b'D'), Some(vec![b'A', b'G', b'T']));
         assert_eq!(expand_amb_base(b'H'), Some(vec![b'A', b'C', b'T']));
         assert_eq!(expand_amb_base(b'V'), Some(vec![b'A', b'C', b'G']));
+        assert_eq!(expand_amb_base(b'B'), Some(vec![b'C', b'G', b'T']));
+
         assert_eq!(expand_amb_base(b'A'), Some(vec![b'A']));
         assert_eq!(expand_amb_base(b'C'), Some(vec![b'C']));
         assert_eq!(expand_amb_base(b'G'), Some(vec![b'G']));
@@ -284,6 +287,7 @@ mod tests {
         assert_eq!(check_kmer(b"ATCGX-"), KmerCheck::ContainsInvalidBases);
         assert_eq!(check_kmer(b"ATCGH"), KmerCheck::ContainsAmbiguities);
         assert_eq!(check_kmer(b"ATCG."), KmerCheck::ContainsInvalidBases);
+        assert_eq!(check_kmer(b"ATCGB"), KmerCheck::ContainsAmbiguities);
 
         // Check Priority
         assert_eq!(check_kmer(b"ATCGNRY "), KmerCheck::ContainsNs);
