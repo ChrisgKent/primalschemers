@@ -16,6 +16,9 @@ static DNA_NM: f64 = 15.0;
 static K_MM: f64 = 100.0;
 static DIVALENT_CONC: f64 = 2.0;
 static DNTP_CONC: f64 = 0.8;
+static DMSO_CONC: f64 = 0.0;
+static DMSO_FACT: f64 = 0.0;
+static FORMAMIDE_CONC: f64 = 0.8;
 
 #[derive(Eq, PartialEq, Hash, Debug, Clone)]
 #[pyclass]
@@ -32,6 +35,7 @@ pub enum DigestError {
 }
 
 #[derive(Eq, PartialEq, Hash, Debug, Clone)]
+#[pyclass]
 pub enum ThermoResult {
     Pass,
     HighGC,
@@ -42,8 +46,9 @@ pub enum ThermoResult {
     LowTm,
     PrimerDimer,
     LowAnnealing,
+    Fail,
 }
-
+#[pyclass]
 #[derive(Eq, PartialEq, Hash, Debug, Clone)]
 pub enum IndexResult {
     ThermoResult(ThermoResult),
@@ -88,7 +93,7 @@ impl DigestionKmers {
     }
 }
 
-fn thermo_check(kmer: &[u8], dconf: &DigestConfig) -> ThermoResult {
+pub fn thermo_check(kmer: &[u8], dconf: &DigestConfig) -> ThermoResult {
     // Check GC content
     let gc = gc_content(kmer);
     if gc < dconf.primer_gc_min {
@@ -113,9 +118,9 @@ fn thermo_check(kmer: &[u8], dconf: &DigestConfig) -> ThermoResult {
                 K_MM,
                 DIVALENT_CONC,
                 DNTP_CONC,
-                0.0,
-                0.0,
-                0.8,
+                DMSO_CONC,
+                DMSO_FACT,
+                FORMAMIDE_CONC,
                 tm::TmMethod::SantaLucia2004,
             );
             if tm >= dconf.primer_tm_max {
@@ -132,15 +137,15 @@ fn thermo_check(kmer: &[u8], dconf: &DigestConfig) -> ThermoResult {
                 K_MM,
                 DIVALENT_CONC,
                 DNTP_CONC,
-                0.0,
-                0.0,
-                0.8,
+                DMSO_CONC,
+                DMSO_FACT,
+                FORMAMIDE_CONC,
                 dconf.annealing_temp_c,
                 tm::TmMethod::SantaLucia2004,
             );
-            if prop < dconf.primer_annealing_prop {
-                return ThermoResult::LowAnnealing;
-            }
+            // if prop < dconf.primer_annealing_prop.unwrap() * 0.5 {
+            //     return ThermoResult::LowAnnealing;
+            // }
         }
     }
 
@@ -176,6 +181,99 @@ fn process_seqs(
     digested
 }
 
+pub fn opto_binding(
+    seq_counts: HashMap<Result<Vec<u8>, DigestError>, f64>,
+    dconf: &DigestConfig,
+) -> HashMap<Result<Vec<u8>, DigestError>, f64> {
+    let mut return_map: HashMap<Result<Vec<u8>, DigestError>, f64> = HashMap::new();
+
+    for (k, v) in seq_counts.into_iter() {
+        let r = match k {
+            Ok(seq) => {
+                let truncated_seq = &seq[1..];
+
+                match dconf.thermo_type {
+                    ThermoType::TM => {
+                        let target_tm = (dconf.primer_tm_max + dconf.primer_tm_min) / 2.0;
+
+                        let full_tm_diff = (tm::oligo_tm_utf8(
+                            &seq,
+                            DNA_NM,
+                            K_MM,
+                            DIVALENT_CONC,
+                            DNTP_CONC,
+                            DMSO_CONC,
+                            DMSO_FACT,
+                            FORMAMIDE_CONC,
+                            tm::TmMethod::SantaLucia2004,
+                        ) - target_tm)
+                            .abs();
+                        let trunc_tm_diff = (tm::oligo_tm_utf8(
+                            truncated_seq,
+                            DNA_NM,
+                            K_MM,
+                            DIVALENT_CONC,
+                            DNTP_CONC,
+                            DMSO_CONC,
+                            DMSO_FACT,
+                            FORMAMIDE_CONC,
+                            tm::TmMethod::SantaLucia2004,
+                        ) - target_tm)
+                            .abs();
+
+                        // Return the seq with the closest tm
+                        if full_tm_diff > trunc_tm_diff {
+                            Ok(truncated_seq.to_vec())
+                        } else {
+                            Ok(seq)
+                        }
+                    }
+                    ThermoType::ANNEALING => {
+                        let full_annealing_diff = (tm::oligo_annealing_utf8(
+                            &seq,
+                            DNA_NM,
+                            K_MM,
+                            DIVALENT_CONC,
+                            DNTP_CONC,
+                            DMSO_CONC,
+                            DMSO_FACT,
+                            FORMAMIDE_CONC,
+                            dconf.annealing_temp_c,
+                            tm::TmMethod::SantaLucia2004,
+                        ) - dconf.primer_annealing_prop.unwrap())
+                        .abs();
+                        let trunc_annealing_diff = (tm::oligo_annealing_utf8(
+                            truncated_seq,
+                            DNA_NM,
+                            K_MM,
+                            DIVALENT_CONC,
+                            DNTP_CONC,
+                            DMSO_CONC,
+                            DMSO_FACT,
+                            FORMAMIDE_CONC,
+                            dconf.annealing_temp_c,
+                            tm::TmMethod::SantaLucia2004,
+                        ) - dconf.primer_annealing_prop.unwrap())
+                        .abs();
+                        // Return the seq with the closest tm
+                        if full_annealing_diff > trunc_annealing_diff {
+                            Ok(truncated_seq.to_vec())
+                        } else {
+                            Ok(seq)
+                        }
+                    }
+                }
+            }
+
+            Err(e) => Err(e),
+        };
+        // Sum Sam seq
+        let c = return_map.entry(r).or_insert(0.0);
+        *c += v;
+    }
+    return return_map;
+}
+
 pub fn walk_right(
     seq: &[u8],
     l_index: usize,
@@ -200,7 +298,7 @@ pub fn walk_right(
                 K_MM,
                 DIVALENT_CONC,
                 DNTP_CONC,
-            ) >= dconf.primer_annealing_prop
+            ) >= dconf.primer_annealing_prop.unwrap()
             {
                 return vec![Ok(kmer.seq)];
             }
@@ -364,8 +462,8 @@ pub fn digest_r_to_count(
         };
         rc_kmer_count.insert(r, v);
     }
-
-    rc_kmer_count
+    // Finally return opto kmers
+    opto_binding(rc_kmer_count, dconf)
 }
 
 pub fn digest_r_at_index(
@@ -510,7 +608,7 @@ pub fn walk_left(
                 K_MM,
                 DIVALENT_CONC,
                 DNTP_CONC,
-            ) >= dconf.primer_annealing_prop
+            ) >= dconf.primer_annealing_prop.unwrap()
             {
                 return vec![Ok(kmer.seq)];
             }
@@ -688,7 +786,8 @@ pub fn digest_f_to_count(
         }
     }
 
-    un_reversed
+    // Finally return opto kmers
+    opto_binding(un_reversed, dconf)
 }
 
 fn digest_f_at_index(
@@ -1037,7 +1136,8 @@ mod tests {
         );
         let seqs = vec!["ATTAAAGGTTTATACCTTCCCAGGTAACAAACCAACCAANTTTCGATCTCTTGTAGATCT".as_bytes()];
 
-        let digested = digest_f_to_count(&seqs, 40, &dconf);
+        let digested: HashMap<Result<Vec<u8>, DigestError>, f64> =
+            digest_f_to_count(&seqs, 40, &dconf);
         // Check num of seqs
         assert_eq!(digested.len(), 1);
         // Check sequence
@@ -1055,5 +1155,96 @@ mod tests {
         assert_eq!(digested.len(), 1);
         // Check sequence
         assert_eq!(digested.contains_key(&Err(DigestError::InvalidBase)), true);
+    }
+
+    #[test]
+    fn test_opto_binding_tm_trunc() {
+        let dconf = DigestConfig::new(
+            None, None, None, None, None, None, None, None, None, None, None, None, None, None,
+        );
+
+        // See is to long. Therefore it should be truncated
+        let seq1: Vec<u8> = b"CTTTTTAGTAGGTATAACCACAGCAGTTAAAAACTGATGCC".to_vec();
+        let seq_count = 10.0;
+
+        let mut count_map: HashMap<Result<Vec<u8>, DigestError>, f64> = HashMap::new();
+        count_map.insert(Ok(seq1.to_vec()), seq_count);
+
+        // Test TM
+        let processed_map = opto_binding(count_map.clone(), &dconf);
+        assert!(processed_map.len() == 1);
+        // Check truncated from 5' end
+        assert_eq!(
+            *processed_map.keys().next().unwrap(),
+            Ok(seq1[1..].to_vec())
+        );
+        assert_eq!(*processed_map.values().next().unwrap(), seq_count);
+    }
+    #[test]
+    fn test_opto_binding_tm_no_trunc() {
+        let dconf = DigestConfig::new(
+            None, None, None, None, None, None, None, None, None, None, None, None, None, None,
+        );
+
+        // Seq is to short. Therefore it should not be truncated
+        let seq1: Vec<u8> = b"CTTTTTAGTAGGTAT".to_vec();
+        let seq_count = 10.0;
+
+        let mut count_map: HashMap<Result<Vec<u8>, DigestError>, f64> = HashMap::new();
+        count_map.insert(Ok(seq1.to_vec()), seq_count);
+
+        // Test TM
+        let processed_map = opto_binding(count_map.clone(), &dconf);
+        assert!(processed_map.len() == 1);
+        // Check not truncated
+        assert_eq!(*processed_map.keys().next().unwrap(), Ok(seq1));
+        assert_eq!(*processed_map.values().next().unwrap(), seq_count);
+    }
+    #[test]
+    fn test_opto_binding_an_trunc() {
+        let mut dconf = DigestConfig::new(
+            None, None, None, None, None, None, None, None, None, None, None, None, None, None,
+        );
+        dconf.thermo_type = ThermoType::ANNEALING;
+        dconf.primer_annealing_prop = Some(10.0);
+
+        // See is to long. Therefore it should be truncated
+        let seq1: Vec<u8> = b"CTTTTTAGTAGGTATAACCACAGCAGTTAAAAACTGATGCC".to_vec();
+        let seq_count = 10.0;
+
+        let mut count_map: HashMap<Result<Vec<u8>, DigestError>, f64> = HashMap::new();
+        count_map.insert(Ok(seq1.to_vec()), seq_count);
+
+        // Test annealing
+        let processed_map = opto_binding(count_map.clone(), &dconf);
+        assert!(processed_map.len() == 1);
+        // Check truncated from 5' end
+        assert_eq!(
+            *processed_map.keys().next().unwrap(),
+            Ok(seq1[1..].to_vec())
+        );
+        assert_eq!(*processed_map.values().next().unwrap(), seq_count);
+    }
+    #[test]
+    fn test_opto_binding_an() {
+        let mut dconf = DigestConfig::new(
+            None, None, None, None, None, None, None, None, None, None, None, None, None, None,
+        );
+        dconf.thermo_type = ThermoType::ANNEALING;
+        dconf.primer_annealing_prop = Some(10.0);
+
+        // See is to long. Therefore it should be truncated
+        let seq1: Vec<u8> = b"CTTTTTAGTAGGTAT".to_vec();
+        let seq_count = 10.0;
+
+        let mut count_map: HashMap<Result<Vec<u8>, DigestError>, f64> = HashMap::new();
+        count_map.insert(Ok(seq1.to_vec()), seq_count);
+
+        // Test annealing
+        let processed_map = opto_binding(count_map.clone(), &dconf);
+        assert!(processed_map.len() == 1);
+        // Check truncated from 5' end
+        assert_eq!(*processed_map.keys().next().unwrap(), Ok(seq1));
+        assert_eq!(*processed_map.values().next().unwrap(), seq_count);
     }
 }

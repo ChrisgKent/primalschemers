@@ -12,7 +12,7 @@ pub struct DigestConfig {
     pub primer_tm_max: f64,
     pub primer_tm_min: f64,
     // Annealing target
-    pub primer_annealing_prop: f64,
+    pub primer_annealing_prop: Option<f64>,
     pub annealing_temp_c: f64,
 
     // Thermo mode
@@ -55,7 +55,7 @@ impl DigestConfig {
             primer_tm_max: primer_tm_max.unwrap_or(62.5),
             primer_tm_min: primer_tm_min.unwrap_or(59.5),
             // Annealing
-            primer_annealing_prop: primer_annealing_prop.unwrap_or(0.1),
+            primer_annealing_prop: primer_annealing_prop,
             annealing_temp_c: annealing_temp_c.unwrap_or(65.0),
             // Thermo
             thermo_type: thermo_type.unwrap_or(ThermoType::TM),

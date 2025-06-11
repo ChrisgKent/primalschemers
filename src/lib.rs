@@ -1,5 +1,5 @@
 use config::{DigestConfig, ThermoType};
-use digest::{DigestError, IndexResult};
+use digest::{thermo_check, DigestError, IndexResult, ThermoResult};
 use indicatif::{ParallelProgressIterator, ProgressBar, ProgressStyle};
 use pyo3::prelude::*;
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
@@ -14,59 +14,88 @@ pub mod seqfuncs;
 pub mod seqio;
 pub mod tm;
 
-#[pyclass]
-struct DigestionCount {
-    pub count: f64,
-    pub result: DigestionResult,
-}
-#[pymethods]
-impl DigestionCount {
-    #[new]
-    fn new(count: f64, result: DigestionResult) -> Self {
-        DigestionCount { count, result }
-    }
-    #[getter]
-    pub fn count(&self) -> &f64 {
-        &self.count
-    }
-    #[getter]
-    pub fn result(&self) -> DigestionResult {
-        self.result.clone()
-    }
+fn parse_de(digest_error: DigestError) -> Vec<u8> {
+    format!("ERROR:{:?}", digest_error).into_bytes()
 }
 
-fn parse_count_map(count_map: HashMap<Result<Vec<u8>, DigestError>, f64>) -> Vec<DigestionCount> {
-    // Parses the result from *_to_count into a vec of DigestionCount
+fn parse_count_map(count_map: HashMap<Result<Vec<u8>, DigestError>, f64>) -> Vec<DigestionResult> {
+    // Parses the result from *_to_count into a vec of DigestionResult
     count_map
         .into_par_iter()
         .map(|(k, v)| match k {
-            Ok(seq) => DigestionCount::new(v, DigestionResult::Seq(seq)),
-            Err(de) => DigestionCount::new(v, DigestionResult::Error(de)),
+            Ok(seq) => DigestionResult::new(v, None, seq),
+            Err(de) => DigestionResult::new(v, None, parse_de(de)),
         })
         .collect()
 }
 
-#[pyclass]
+#[pyclass(subclass)]
 #[derive(Clone)]
-enum DigestionResult {
-    Seq(Vec<u8>),
-    Error(DigestError),
+struct DigestionResult {
+    pub count: f64,
+    pub result: Vec<u8>,
+    pub error: Option<ThermoResult>,
 }
 #[pymethods]
 impl DigestionResult {
-    #[getter]
-    fn seq(&self) -> Option<&Vec<u8>> {
-        if let DigestionResult::Seq(seq) = &self {
-            return Some(seq);
-        };
-        return None;
+    #[new]
+    fn new(count: f64, error: Option<ThermoResult>, result: Vec<u8>) -> Self {
+        DigestionResult {
+            count,
+            result,
+            error,
+        }
+    }
+
+    pub fn is_error(&self) -> bool {
+        self.result.starts_with(b"ERROR")
+    }
+
+    pub fn pass(&self) -> bool {
+        if self.count <= 0.0 {
+            return false;
+        }
+
+        if self.error.is_some() || self.is_error() {
+            return false;
+        }
+
+        true
     }
     #[getter]
-    fn error(&self) -> Option<DigestError> {
-        if let DigestionResult::Error(error) = &self {
-            return Some(error.clone());
-        };
-        return None;
+    fn result(&self) -> &Vec<u8> {
+        return &self.result;
+    }
+    #[getter]
+    fn count(&self) -> f64 {
+        return self.count;
+    }
+    #[getter]
+    fn error(&self) -> Option<String> {
+        self.error.as_ref().map(|e| format!("{:?}", e))
+    }
+}
+impl DigestionResult {
+    pub fn thermo_check(&mut self, dconf: &DigestConfig) -> bool {
+        // If already errored return false
+        if self.error.is_some() {
+            return false;
+        }
+        // handle no seq
+        if self.is_error() {
+            self.error = Some(ThermoResult::Fail);
+            return false;
+        }
+
+        let seq: &[u8] = self.result.as_slice();
+        let thermo_check = thermo_check(seq, dconf);
+        match thermo_check {
+            ThermoResult::Pass => return true,
+            _ => {
+                self.error = Some(thermo_check);
+                return false;
+            }
+        }
     }
 }
 
@@ -136,7 +165,7 @@ impl Digester {
         min_freq: Option<f64>,
         ignore_n: Option<bool>,
         dimerscore: Option<f64>,
-    ) -> Vec<(usize, Vec<DigestionCount>)> {
+    ) -> Vec<(usize, Vec<DigestionResult>)> {
         // If both annealing are set use annealing
         let thermo_type = match (primer_annealing_prop, annealing_temp_c) {
             (Some(_), Some(_)) => ThermoType::ANNEALING,
@@ -162,7 +191,7 @@ impl Digester {
 
         let seq_slice = self.create_seq_slice();
 
-        let kmers: Vec<(usize, Vec<DigestionCount>)> = self._thread_pool.install(|| {
+        let kmers: Vec<(usize, Vec<DigestionResult>)> = self._thread_pool.install(|| {
             let indexes: Vec<usize> = match findexes {
                 // Could add checks
                 Some(i) => i,
@@ -182,7 +211,13 @@ impl Digester {
                 .map(|fi| {
                     (
                         fi,
-                        parse_count_map(digest::digest_f_to_count(&seq_slice, fi, &dconf)),
+                        parse_count_map(digest::digest_f_to_count(&seq_slice, fi, &dconf))
+                            .into_iter()
+                            .map(|mut dr| {
+                                dr.thermo_check(&dconf); // Thermo check the dr in rust
+                                dr
+                            })
+                            .collect(),
                     )
                 })
                 .collect();
@@ -208,7 +243,7 @@ impl Digester {
         min_freq: Option<f64>,
         ignore_n: Option<bool>,
         dimerscore: Option<f64>,
-    ) -> Vec<(usize, Vec<DigestionCount>)> {
+    ) -> Vec<(usize, Vec<DigestionResult>)> {
         // If both annealing are set use annealing
         let thermo_type = match (primer_annealing_prop, annealing_temp_c) {
             (Some(_), Some(_)) => ThermoType::ANNEALING,
@@ -233,7 +268,7 @@ impl Digester {
         );
         let seq_slice = self.create_seq_slice();
 
-        let kmers: Vec<(usize, Vec<DigestionCount>)> = self._thread_pool.install(|| {
+        let kmers: Vec<(usize, Vec<DigestionResult>)> = self._thread_pool.install(|| {
             let indexes: Vec<usize> = match rindexes {
                 // Could add checks
                 Some(i) => i,
@@ -254,7 +289,13 @@ impl Digester {
                 .map(|fi| {
                     (
                         fi,
-                        parse_count_map(digest::digest_r_to_count(&seq_slice, fi, &dconf)),
+                        parse_count_map(digest::digest_f_to_count(&seq_slice, fi, &dconf))
+                            .into_iter()
+                            .map(|mut dr| {
+                                dr.thermo_check(&dconf); // Thermo check the dr in rust
+                                dr
+                            })
+                            .collect(),
                     )
                 })
                 .collect();
@@ -659,7 +700,9 @@ fn _core(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<Digester>()?;
 
     // Return types
-    m.add_class::<DigestionCount>()?;
+    m.add_class::<DigestionResult>()?;
+    m.add_class::<IndexResult>()?;
+    m.add_class::<ThermoResult>()?;
     m.add_class::<DigestError>()?;
     m.add_class::<DigestionResult>()?;
 
