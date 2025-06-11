@@ -6,7 +6,6 @@ use crate::seqfuncs::{
 };
 use crate::{primaldimer, tm};
 
-use pyo3::prelude::*;
 use std::collections::HashMap;
 
 use indicatif::{ParallelProgressIterator, ProgressBar, ProgressStyle};
@@ -21,7 +20,6 @@ static DMSO_FACT: f64 = 0.0;
 static FORMAMIDE_CONC: f64 = 0.8;
 
 #[derive(Eq, PartialEq, Hash, Debug, Clone)]
-#[pyclass]
 pub enum DigestError {
     InvalidBase,
     WalkedOutLeft,
@@ -35,7 +33,6 @@ pub enum DigestError {
 }
 
 #[derive(Eq, PartialEq, Hash, Debug, Clone)]
-#[pyclass]
 pub enum ThermoResult {
     Pass,
     HighGC,
@@ -48,7 +45,7 @@ pub enum ThermoResult {
     LowAnnealing,
     Fail,
 }
-#[pyclass]
+
 #[derive(Eq, PartialEq, Hash, Debug, Clone)]
 pub enum IndexResult {
     ThermoResult(ThermoResult),
@@ -512,7 +509,7 @@ pub fn digest_r_at_index(
         return Err(IndexResult::DigestError(DigestError::NoValidPrimer));
     }
 
-    Ok(RKmer::new(seqs, index))
+    Ok(RKmer::new(seqs, index, None))
 }
 
 pub fn digest_r_dk(seq_array: &Vec<&[u8]>, dconf: &DigestConfig) -> Vec<Vec<DigestionKmers>> {
@@ -836,7 +833,7 @@ fn digest_f_at_index(
         return Err(IndexResult::DigestError(DigestError::NoValidPrimer));
     }
     // Create the FKmer
-    Ok(FKmer::new(seqs, index))
+    Ok(FKmer::new(seqs, index, None))
 }
 
 pub fn digest_f_dk(seq_array: &Vec<&[u8]>, dconf: &DigestConfig) -> Vec<Vec<DigestionKmers>> {

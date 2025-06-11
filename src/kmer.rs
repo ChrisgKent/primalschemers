@@ -5,21 +5,69 @@ use std::str::from_utf8;
 
 use crate::primaldimer;
 
-#[derive(Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, PartialEq, PartialOrd)]
 #[pyclass]
 pub struct FKmer {
     seqs: Vec<Vec<u8>>,
+    counts: Option<Vec<f64>>,
     end: usize,
+}
+
+// Implement Eq manually by ignoring the counts field
+impl Eq for FKmer {}
+
+// Implement Ord manually by ignoring the counts field for comparison
+impl Ord for FKmer {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        // Compare only seqs and end, ignoring counts
+        match self.seqs.cmp(&other.seqs) {
+            std::cmp::Ordering::Equal => self.end.cmp(&other.end),
+            ordering => ordering,
+        }
+    }
 }
 #[pymethods]
 impl FKmer {
+    #[pyo3(signature = (seqs, end, counts=None,))]
     #[new]
-    pub fn new(mut seqs: Vec<Vec<u8>>, end: usize) -> FKmer {
-        seqs.sort(); // Sort the sequences by base
-        seqs.dedup();
+    pub fn new(seqs: Vec<Vec<u8>>, end: usize, counts: Option<Vec<f64>>) -> FKmer {
+        let (sorted_seqs, sorted_counts) = match counts {
+            Some(counts_vec) => {
+                if counts_vec.iter().len() != seqs.iter().len() {
+                    panic!("Different number of seqs and counts")
+                }
+                // Create pairs of (seq, count), sort by seq, then separate
+                let mut pairs: Vec<(Vec<u8>, f64)> =
+                    seqs.into_iter().zip(counts_vec.into_iter()).collect();
+                pairs.sort_by(|a, b| a.0.cmp(&b.0));
+
+                // Remove duplicates while preserving counts (sum counts for duplicates)
+                let mut unique_pairs: Vec<(Vec<u8>, f64)> = Vec::new();
+                for (seq, count) in pairs {
+                    if let Some(existing) = unique_pairs
+                        .iter_mut()
+                        .find(|(existing_seq, _)| existing_seq == &seq)
+                    {
+                        existing.1 += count; // Sum the counts for duplicate sequences
+                    } else {
+                        unique_pairs.push((seq, count));
+                    }
+                }
+
+                let (seqs, counts): (Vec<Vec<u8>>, Vec<f64>) = unique_pairs.into_iter().unzip();
+                (seqs, Some(counts))
+            }
+            None => {
+                let mut sorted_seqs = seqs;
+                sorted_seqs.sort();
+                sorted_seqs.dedup();
+                (sorted_seqs, None)
+            }
+        };
         FKmer {
-            seqs: seqs,
+            seqs: sorted_seqs,
             end: end,
+            counts: sorted_counts,
         }
     }
     pub fn starts(&self) -> Vec<usize> {
@@ -88,19 +136,69 @@ impl FKmer {
 }
 
 #[pyclass]
-#[derive(Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, PartialEq, PartialOrd)]
 pub struct RKmer {
     seqs: Vec<Vec<u8>>,
+    counts: Option<Vec<f64>>,
     start: usize,
 }
+
+// Implement Eq manually by ignoring the counts field
+impl Eq for RKmer {}
+
+// Implement Ord manually by ignoring the counts field for comparison
+impl Ord for RKmer {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        // Compare only seqs and end, ignoring counts
+        match self.seqs.cmp(&other.seqs) {
+            std::cmp::Ordering::Equal => self.start.cmp(&other.start),
+            ordering => ordering,
+        }
+    }
+}
+
 #[pymethods]
 impl RKmer {
     #[new]
-    pub fn new(mut seqs: Vec<Vec<u8>>, start: usize) -> RKmer {
-        seqs.sort(); // Sort the sequences by base
-        seqs.dedup();
+    #[pyo3(signature = (seqs, start, counts=None,))]
+    pub fn new(seqs: Vec<Vec<u8>>, start: usize, counts: Option<Vec<f64>>) -> RKmer {
+        let (sorted_seqs, sorted_counts) = match counts {
+            Some(counts_vec) => {
+                if counts_vec.iter().len() != seqs.iter().len() {
+                    panic!("Different number of seqs and counts")
+                }
+
+                // Create pairs of (seq, count), sort by seq, then separate
+                let mut pairs: Vec<(Vec<u8>, f64)> =
+                    seqs.into_iter().zip(counts_vec.into_iter()).collect();
+                pairs.sort_by(|a, b| a.0.cmp(&b.0));
+
+                // Remove duplicates while preserving counts (sum counts for duplicates)
+                let mut unique_pairs: Vec<(Vec<u8>, f64)> = Vec::new();
+                for (seq, count) in pairs {
+                    if let Some(existing) = unique_pairs
+                        .iter_mut()
+                        .find(|(existing_seq, _)| existing_seq == &seq)
+                    {
+                        existing.1 += count; // Sum the counts for duplicate sequences
+                    } else {
+                        unique_pairs.push((seq, count));
+                    }
+                }
+
+                let (seqs, counts): (Vec<Vec<u8>>, Vec<f64>) = unique_pairs.into_iter().unzip();
+                (seqs, Some(counts))
+            }
+            None => {
+                let mut sorted_seqs = seqs;
+                sorted_seqs.sort();
+                sorted_seqs.dedup();
+                (sorted_seqs, None)
+            }
+        };
         RKmer {
-            seqs: seqs,
+            seqs: sorted_seqs,
+            counts: sorted_counts,
             start: start,
         }
     }
@@ -299,38 +397,83 @@ mod tests {
     #[test]
     fn test_fkmer_start() {
         let seqs = vec![b"ATCG".to_vec()];
-        let fkmer = FKmer::new(seqs, 100);
+        let fkmer = FKmer::new(seqs, 100, None);
         assert_eq!(fkmer.starts(), vec![96]);
     }
     #[test]
     fn test_fkmer_start_lt_zero() {
         let seqs = vec![b"ATCG".to_vec()];
-        let fkmer = FKmer::new(seqs, 1);
+        let fkmer = FKmer::new(seqs, 1, None);
         assert_eq!(fkmer.starts(), vec![0]);
     }
     #[test]
     fn test_fkmer_dedup() {
         let seqs = vec![b"ATCG".to_vec(), b"ATCG".to_vec()];
-        let fkmer = FKmer::new(seqs, 100);
+        let fkmer = FKmer::new(seqs, 100, None);
         assert_eq!(fkmer.seqs().len(), 1);
     }
     #[test]
+    fn test_fkmer_counts_order() {
+        let seqs = vec![b"GGGG".to_vec(), b"AAAA".to_vec()];
+        let counts = vec![10.0, 51.0];
+
+        let fkmer = FKmer::new(seqs.clone(), 100, Some(counts.clone()));
+
+        // Check the counts maintained paired when seqs are reordered
+        assert_ne!(seqs, fkmer.seqs);
+        assert_ne!(Some(counts.clone()), fkmer.counts);
+    }
+
+    #[test]
+    fn test_fkmer_counts_dupe() {
+        let seqs = vec![b"AAAA".to_vec(), b"AAAA".to_vec()];
+        let counts = vec![10.0, 51.0];
+
+        let fkmer = FKmer::new(seqs.clone(), 100, Some(counts.clone()));
+
+        // Check the duplicate counts are summed
+        assert_eq!(Some(vec![counts.iter().sum()]), fkmer.counts);
+    }
+
+    #[test]
     fn test_rkmer_end() {
         let seqs = vec![b"ATCG".to_vec()];
-        let rkmer = RKmer::new(seqs, 100);
+        let rkmer = RKmer::new(seqs, 100, None);
         assert_eq!(rkmer.ends(), vec![104]);
     }
     #[test]
     fn test_rkmer_end_lt_zero() {
         let seqs = vec![b"ATCG".to_vec()];
-        let rkmer = RKmer::new(seqs, 1);
+        let rkmer = RKmer::new(seqs, 1, None);
         assert_eq!(rkmer.ends(), vec![5]);
     }
 
     #[test]
     fn test_rkmer_lens() {
         let seqs = vec![b"ATCG".to_vec(), b"ATCG".to_vec()];
-        let rkmer = RKmer::new(seqs, 100);
+        let rkmer = RKmer::new(seqs, 100, None);
         assert_eq!(rkmer.lens(), vec![4]);
+    }
+    #[test]
+    fn test_rkmer_counts_order() {
+        let seqs = vec![b"GGGG".to_vec(), b"AAAA".to_vec()];
+        let counts = vec![10.0, 51.0];
+
+        let rkmer = RKmer::new(seqs.clone(), 100, Some(counts.clone()));
+
+        // Check the counts maintained paired when seqs are reordered
+        assert_ne!(seqs, rkmer.seqs);
+        assert_ne!(Some(counts.clone()), rkmer.counts);
+    }
+
+    #[test]
+    fn test_rkmer_counts_dupe() {
+        let seqs = vec![b"AAAA".to_vec(), b"AAAA".to_vec()];
+        let counts = vec![10.0, 51.0];
+
+        let rkmer = RKmer::new(seqs.clone(), 100, Some(counts.clone()));
+
+        // Check the duplicate counts are summed
+        assert_eq!(Some(vec![counts.iter().sum()]), rkmer.counts);
     }
 }

@@ -226,7 +226,7 @@ pub fn calc_at_offset(seq1: &[u8], seq2: &[u8], offset: i32) -> Option<f64> {
 
     for x in 0..seq1.len() {
         let seq2_index = x as i32 + offset;
-        if seq2_index >= 0 {
+        if seq2_index >= 0 && (seq2_index as usize) < seq2.len() - 1 {
             mapping.push((seq2_index as usize, x))
         }
     }
