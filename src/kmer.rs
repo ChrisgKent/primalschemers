@@ -107,12 +107,16 @@ impl FKmer {
     pub fn to_bed(&self, chrom: String, amplicon_prefix: String, pool: usize) -> String {
         let mut string = String::new();
         for (index, seq) in self.seqs().iter().enumerate() {
+            let start_pos = match self.end.checked_sub(seq.len()) {
+                Some(pos) => pos,
+                None => 0,
+            };
             string.push_str(&format!(
                 "{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
                 chrom,
-                self.end - seq.len(),
+                start_pos,
                 self.end,
-                format!("{}_LEFT_{}", amplicon_prefix, index + 1), // +1 for 1-based indexing
+                format!("{}_LEFT_{}", amplicon_prefix, index + 1), // +1 for 1-based indexing of primer_number
                 pool,
                 "+",
                 seq
