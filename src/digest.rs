@@ -42,6 +42,7 @@ pub enum ThermoResult {
     HighTm,
     LowTm,
     PrimerDimer,
+    HighAnnealing,
     LowAnnealing,
     Fail,
 }
@@ -140,9 +141,13 @@ pub fn thermo_check(kmer: &[u8], dconf: &DigestConfig) -> ThermoResult {
                 dconf.annealing_temp_c,
                 tm::TmMethod::SantaLucia2004,
             );
-            // if prop < dconf.primer_annealing_prop.unwrap() * 0.5 {
-            //     return ThermoResult::LowAnnealing;
-            // }
+
+            if prop < dconf.primer_annealing_prop.unwrap() * 0.5 {
+                return ThermoResult::LowAnnealing;
+            }
+            if prop < dconf.primer_annealing_prop.unwrap() * 1.5 {
+                return ThermoResult::HighAnnealing;
+            }
         }
     }
 
