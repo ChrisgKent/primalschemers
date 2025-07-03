@@ -144,11 +144,11 @@ pub fn thermo_check(kmer: &[u8], dconf: &DigestConfig) -> ThermoResult {
                 tm::TmMethod::SantaLucia2004,
             );
 
-            if prop < dconf.primer_annealing_prop.unwrap() + ANNEALING_DIFF {
-                return ThermoResult::LowAnnealing;
+            if prop > dconf.primer_annealing_prop.unwrap() + ANNEALING_DIFF {
+                return ThermoResult::HighAnnealing;
             }
             if prop < dconf.primer_annealing_prop.unwrap() - ANNEALING_DIFF {
-                return ThermoResult::HighAnnealing;
+                return ThermoResult::LowAnnealing;
             }
         }
     }
