@@ -54,6 +54,7 @@ pub enum IndexResult {
     ThermoResult(ThermoResult),
     DigestError(DigestError),
     Pass(),
+    NotChecked(),
 }
 
 pub struct DigestionKmers {
@@ -109,7 +110,6 @@ pub fn thermo_check(kmer: &[u8], dconf: &DigestConfig) -> ThermoResult {
     }
 
     // Check Tm if using TM Method
-
     match dconf.thermo_type {
         ThermoType::TM => {
             let tm = tm::oligo_tm_utf8(
@@ -167,7 +167,12 @@ fn process_seqs(
             Ok(s) => {
                 // If sequence provided check thermo
                 let mut dk = DigestionKmers::new(Some(s), None, v as f64);
-                dk._thermo_check(dconf);
+                if dconf.thermo_check {
+                    // If thermo check is enabled, check the sequence
+                    dk._thermo_check(dconf);
+                } else {
+                    dk.status = Some(IndexResult::NotChecked());
+                }
                 dk
             }
             Err(e) => {
@@ -226,7 +231,7 @@ pub fn opto_binding(
                             .abs();
 
                         // Return the seq with the closest tm
-                        if full_tm_diff > trunc_tm_diff {
+                        if full_tm_diff >= trunc_tm_diff {
                             Ok(truncated_seq.to_vec())
                         } else {
                             Ok(seq)
@@ -260,7 +265,7 @@ pub fn opto_binding(
                         ) - dconf.primer_annealing_prop.unwrap())
                         .abs();
                         // Return the seq with the closest tm
-                        if full_annealing_diff > trunc_annealing_diff {
+                        if full_annealing_diff >= trunc_annealing_diff {
                             Ok(truncated_seq.to_vec())
                         } else {
                             Ok(seq)
@@ -487,6 +492,13 @@ pub fn digest_r_at_index(
             Some(IndexResult::ThermoResult(ThermoResult::Pass)) => {}
             Some(IndexResult::Pass()) => {}
             Some(IndexResult::DigestError(DigestError::EndOfSequence)) => {} // Ignore EOS errors
+            // Maybe allow non-thermo checked
+            Some(IndexResult::NotChecked()) => {
+                // If thermo check is not enabled, we can ignore this
+                if dconf.thermo_check {
+                    return Err(IndexResult::DigestError(DigestError::NoValidPrimer));
+                }
+            }
             // Maybe ignore N
             Some(IndexResult::DigestError(DigestError::ContainsN)) => {
                 if dconf.ignore_n {
@@ -506,7 +518,7 @@ pub fn digest_r_at_index(
     }
     // Filter EOS
     let dks: Vec<DigestionKmers> = dks.into_iter().filter(|dk| dk.seq.is_some()).collect();
-
+    let counts = dks.iter().map(|dk| dk.count).collect::<Vec<f64>>();
     let seqs = dks.into_iter().map(|dk| dk.seq.unwrap()).collect();
     if primaldimer::do_pool_interact_u8(&seqs, &seqs, dconf.dimerscore) {
         return Err(IndexResult::ThermoResult(ThermoResult::PrimerDimer));
@@ -516,7 +528,7 @@ pub fn digest_r_at_index(
         return Err(IndexResult::DigestError(DigestError::NoValidPrimer));
     }
 
-    Ok(RKmer::new(seqs, index, None))
+    Ok(RKmer::new(seqs, index, Some(counts)))
 }
 
 pub fn digest_r_dk(seq_array: &Vec<&[u8]>, dconf: &DigestConfig) -> Vec<Vec<DigestionKmers>> {
@@ -812,7 +824,14 @@ fn digest_f_at_index(
             Some(IndexResult::ThermoResult(ThermoResult::Pass)) => {}
             Some(IndexResult::Pass()) => {}
             Some(IndexResult::DigestError(DigestError::EndOfSequence)) => {} // Ignore EOS errors
-            // Ignore N
+            // Maybe allow non-thermo checked
+            Some(IndexResult::NotChecked()) => {
+                // If thermo check is not enabled, we can ignore this
+                if dconf.thermo_check {
+                    return Err(IndexResult::DigestError(DigestError::NoValidPrimer));
+                }
+            }
+            // Maybe Ignore N
             Some(IndexResult::DigestError(DigestError::ContainsN)) => {
                 if dconf.ignore_n {
                     continue;
@@ -832,6 +851,7 @@ fn digest_f_at_index(
     // Filter EOS
     let dks: Vec<DigestionKmers> = dks.into_iter().filter(|dk| dk.seq.is_some()).collect();
 
+    let counts = dks.iter().map(|dk| dk.count).collect::<Vec<f64>>();
     let seqs = dks.into_iter().map(|dk| dk.seq.unwrap()).collect();
     if primaldimer::do_pool_interact_u8(&seqs, &seqs, dconf.dimerscore) {
         return Err(IndexResult::ThermoResult(ThermoResult::PrimerDimer));
@@ -839,8 +859,8 @@ fn digest_f_at_index(
     if seqs.len() == 0 {
         return Err(IndexResult::DigestError(DigestError::NoValidPrimer));
     }
-    // Create the FKmer
-    Ok(FKmer::new(seqs, index, None))
+
+    Ok(FKmer::new(seqs, index, Some(counts)))
 }
 
 pub fn digest_f_dk(seq_array: &Vec<&[u8]>, dconf: &DigestConfig) -> Vec<Vec<DigestionKmers>> {
@@ -915,6 +935,7 @@ mod tests {
     fn test_digest_r_to_count() {
         let dconf = DigestConfig::new(
             None, None, None, None, None, None, None, None, None, None, None, None, None, None,
+            None,
         );
         let seqs = vec!["ATTAAAGGTTTATACCTTCCCAGGTAACAAACCAACCAACTTTCGATCTCTTGTAGATCT".as_bytes()];
 
@@ -944,22 +965,7 @@ mod tests {
 
     #[test]
     fn test_digest_r_at_index_ps3() {
-        let dconf = DigestConfig::new(
-            None,
-            None,
-            None,
-            Some(0.3),
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-        );
+        let dconf = DigestConfig::create_default();
         let seqs =
             vec!["CCAATGGTGCAAAAGGTATAATCANTAATGTCCAATGGTGCAAAAGGTATAATCATTAATGT".as_bytes()];
 
@@ -985,9 +991,7 @@ mod tests {
 
     #[test]
     fn test_digest_r_to_count_ambs() {
-        let dconf = DigestConfig::new(
-            None, None, None, None, None, None, None, None, None, None, None, None, None, None,
-        );
+        let dconf = DigestConfig::create_default();
         let seqs = vec!["ATTAAAGGTTTATACCTTCCCAGGTAACAAACCAACCAACTTTRCGATCTCTTGTAGATCT".as_bytes()];
 
         let digested = digest_r_to_count(&seqs, 30, &dconf);
@@ -1012,9 +1016,7 @@ mod tests {
 
     #[test]
     fn test_digest_f_to_count() {
-        let dconf = DigestConfig::new(
-            None, None, None, None, None, None, None, None, None, None, None, None, None, None,
-        );
+        let dconf = DigestConfig::create_default();
         let seqs = vec!["ATTAAAGGTTTATACCTTCCCAGGTAACAAACCAACCAACTTTCGATCTCTTGTAGATCT".as_bytes()];
 
         let digested = digest_f_to_count(&seqs, 40, &dconf);
@@ -1032,9 +1034,7 @@ mod tests {
 
     #[test]
     fn test_digest_f_to_count_ps3() {
-        let dconf = DigestConfig::new(
-            None, None, None, None, None, None, None, None, None, None, None, None, None, None,
-        );
+        let dconf = DigestConfig::create_default();
         let seqs =
             vec!["CCAATGGTGCAAAAGGTATAATCATTAATGTCCAATGGTGCAAAAGGTATAATCATTAATGT".as_bytes()];
 
@@ -1052,9 +1052,7 @@ mod tests {
 
     #[test]
     fn test_digest_f_to_count_gap() {
-        let dconf = DigestConfig::new(
-            None, None, None, None, None, None, None, None, None, None, None, None, None, None,
-        );
+        let dconf = DigestConfig::create_default();
         let seqs = vec!["ATTAAAGGTTTATACCTTCCCAGGTAACAAACCAACCAA-TTTCGATCTCTTGTAGATCT".as_bytes()];
 
         let digested = digest_f_to_count(&seqs, 40, &dconf);
@@ -1066,9 +1064,7 @@ mod tests {
 
     #[test]
     fn test_digest_f_to_count_ambs() {
-        let dconf = DigestConfig::new(
-            None, None, None, None, None, None, None, None, None, None, None, None, None, None,
-        );
+        let dconf = DigestConfig::create_default();
         let seqs = vec!["ATTAAAGGTTTATACCTTCCCAGGTAACAAACCAACCAARTTTCGATCTCTTGTAGATCT".as_bytes()];
 
         let digested = digest_f_to_count(&seqs, 40, &dconf);
@@ -1101,9 +1097,7 @@ mod tests {
 
     #[test]
     fn test_digest_f_to_count_ambs_extend() {
-        let dconf = DigestConfig::new(
-            None, None, None, None, None, None, None, None, None, None, None, None, None, None,
-        );
+        let dconf = DigestConfig::create_default();
         let seqs = vec!["ATTAAAGGTTTATACCTTCCCAGGTAACAAACCAACCRARTTTCGATCTCTTGTAGATCT".as_bytes()];
         // Check that appending amb bases works as expected
         let digested = digest_f_to_count(&seqs, 60, &dconf);
@@ -1118,9 +1112,7 @@ mod tests {
 
     #[test]
     fn test_digest_f_to_count_wl() {
-        let dconf = DigestConfig::new(
-            None, None, None, None, None, None, None, None, None, None, None, None, None, None,
-        );
+        let dconf = DigestConfig::create_default();
         let seqs = vec!["ATTAAAGGTTTATACCTTCCCAGGTAACAAACCAACCAA-TTTCGATCTCTTGTAGATCT".as_bytes()];
 
         let digested = digest_f_to_count(&seqs, 4, &dconf);
@@ -1135,9 +1127,7 @@ mod tests {
 
     #[test]
     fn test_digest_f_to_count_contains_n() {
-        let dconf = DigestConfig::new(
-            None, None, None, None, None, None, None, None, None, None, None, None, None, None,
-        );
+        let dconf = DigestConfig::create_default();
         let seqs = vec!["ATTAAAGGTTTATACCTTCCCAGGTAACAAACCAACCAANTTTCGATCTCTTGTAGATCT".as_bytes()];
 
         let digested: HashMap<Result<Vec<u8>, DigestError>, f64> =
@@ -1149,9 +1139,7 @@ mod tests {
     }
     #[test]
     fn test_digest_f_to_count_invalid_base() {
-        let dconf = DigestConfig::new(
-            None, None, None, None, None, None, None, None, None, None, None, None, None, None,
-        );
+        let dconf = DigestConfig::create_default();
         let seqs = vec!["ATTAAAGGTTTATACCTTCCCAGGTAACAAACCAACCAA!TTTCGATCTCTTGTAGATCT".as_bytes()];
 
         let digested = digest_f_to_count(&seqs, 40, &dconf);
@@ -1163,9 +1151,7 @@ mod tests {
 
     #[test]
     fn test_opto_binding_tm_trunc() {
-        let dconf = DigestConfig::new(
-            None, None, None, None, None, None, None, None, None, None, None, None, None, None,
-        );
+        let dconf = DigestConfig::create_default();
 
         // See is to long. Therefore it should be truncated
         let seq1: Vec<u8> = b"CTTTTTAGTAGGTATAACCACAGCAGTTAAAAACTGATGCC".to_vec();
@@ -1186,9 +1172,7 @@ mod tests {
     }
     #[test]
     fn test_opto_binding_tm_no_trunc() {
-        let dconf = DigestConfig::new(
-            None, None, None, None, None, None, None, None, None, None, None, None, None, None,
-        );
+        let dconf = DigestConfig::create_default();
 
         // Seq is to short. Therefore it should not be truncated
         let seq1: Vec<u8> = b"CTTTTTAGTAGGTAT".to_vec();
@@ -1206,9 +1190,7 @@ mod tests {
     }
     #[test]
     fn test_opto_binding_an_trunc() {
-        let mut dconf = DigestConfig::new(
-            None, None, None, None, None, None, None, None, None, None, None, None, None, None,
-        );
+        let mut dconf = DigestConfig::create_default();
         dconf.thermo_type = ThermoType::ANNEALING;
         dconf.primer_annealing_prop = Some(10.0);
 
@@ -1231,9 +1213,7 @@ mod tests {
     }
     #[test]
     fn test_opto_binding_an() {
-        let mut dconf = DigestConfig::new(
-            None, None, None, None, None, None, None, None, None, None, None, None, None, None,
-        );
+        let mut dconf = DigestConfig::create_default();
         dconf.thermo_type = ThermoType::ANNEALING;
         dconf.primer_annealing_prop = Some(10.0);
 

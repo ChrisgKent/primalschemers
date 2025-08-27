@@ -84,6 +84,9 @@ impl FKmer {
     pub fn end(&self) -> usize {
         self.end
     }
+    pub fn counts(&self) -> &Option<Vec<f64>> {
+        &self.counts
+    }
     pub fn len(&self) -> Vec<usize> {
         self.seqs.iter().map(|s| s.len()).collect()
     }
@@ -111,15 +114,25 @@ impl FKmer {
                 Some(pos) => pos,
                 None => 0,
             };
+            let seq_count = self.counts.as_ref().and_then(|c| c.get(index));
+            let attr_str: String;
+
+            match seq_count {
+                Some(c) => {
+                    attr_str = format!("\tpc={}", c);
+                }
+                None => attr_str = "".to_string(),
+            }
             string.push_str(&format!(
-                "{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
+                "{}\t{}\t{}\t{}\t{}\t{}\t{}{}\n",
                 chrom,
                 start_pos,
                 self.end,
                 format!("{}_LEFT_{}", amplicon_prefix, index + 1), // +1 for 1-based indexing of primer_number
                 pool,
                 "+",
-                seq
+                seq,
+                attr_str
             ));
         }
         string
@@ -136,6 +149,10 @@ impl FKmer {
                 gc_count as f64 / s.len() as f64
             })
             .collect()
+    }
+
+    pub fn counts_sum(&self) -> Option<f64> {
+        self.counts.as_ref().map(|c| c.iter().sum())
     }
 }
 
@@ -217,6 +234,9 @@ impl RKmer {
     pub fn start(&self) -> usize {
         self.start
     }
+    pub fn counts(&self) -> &Option<Vec<f64>> {
+        &self.counts
+    }
     pub fn ends(&self) -> Vec<usize> {
         self.seqs.iter().map(|s| self.start + s.len()).collect()
     }
@@ -236,15 +256,26 @@ impl RKmer {
     pub fn to_bed(&self, chrom: String, amplicon_prefix: String, pool: usize) -> String {
         let mut string = String::new();
         for (index, seq) in self.seqs().iter().enumerate() {
+            let seq_count = self.counts.as_ref().and_then(|c| c.get(index));
+            let attr_str: String;
+
+            match seq_count {
+                Some(c) => {
+                    attr_str = format!("\tpc={}", c);
+                }
+                None => attr_str = "".to_string(),
+            }
+
             string.push_str(&format!(
-                "{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
+                "{}\t{}\t{}\t{}\t{}\t{}\t{}{}\n",
                 chrom,
                 self.start,
                 self.start + seq.len(),
                 format!("{}_RIGHT_{}", amplicon_prefix, index + 1), // +1 for 1-based indexing
                 pool,
                 "-",
-                seq
+                seq,
+                attr_str
             ));
         }
         string
@@ -262,6 +293,10 @@ impl RKmer {
                 gc_count as f64 / s.len() as f64
             })
             .collect()
+    }
+
+    pub fn counts_sum(&self) -> Option<f64> {
+        self.counts.as_ref().map(|c| c.iter().sum())
     }
 }
 

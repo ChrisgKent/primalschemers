@@ -1,9 +1,11 @@
 use config::{DigestConfig, ThermoType};
-use digest::{thermo_check, DigestError, IndexResult, ThermoResult};
+use digest::IndexResult;
 use indicatif::ProgressBar;
 use pyo3::prelude::*;
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use std::{collections::HashMap, time::Duration};
+
+use crate::digest::thermo_check;
 
 pub mod config;
 pub mod digest;
@@ -64,7 +66,7 @@ impl Digester {
             .collect::<Vec<&[u8]>>()
     }
 
-    #[pyo3(signature = (findexes=None, rindexes=None, primer_len_min=None, primer_len_max=None, primer_gc_max=None, primer_gc_min=None, primer_tm_max=None, primer_tm_min=None, primer_annealing_prop=None, annealing_temp_c=None, max_walk=None, max_homopolymers=None, min_freq=None, ignore_n=None, dimerscore=None, return_counts=false ))]
+    #[pyo3(signature = (findexes=None, rindexes=None, primer_len_min=None, primer_len_max=None, primer_gc_max=None, primer_gc_min=None, primer_tm_max=None, primer_tm_min=None, primer_annealing_prop=None, annealing_temp_c=None, max_walk=None, max_homopolymers=None, min_freq=None, ignore_n=None, dimerscore=None, thermo_check=false))]
     pub fn digest(
         &self,
         findexes: Option<Vec<usize>>,
@@ -82,7 +84,7 @@ impl Digester {
         min_freq: Option<f64>,
         ignore_n: Option<bool>,
         dimerscore: Option<f64>,
-        return_counts: bool,
+        thermo_check: Option<bool>,
     ) -> PyResult<(Vec<kmer::FKmer>, Vec<kmer::RKmer>, Vec<String>)> {
         // If both annealing are set use annealing
         let thermo_type = match (primer_annealing_prop, annealing_temp_c) {
@@ -105,6 +107,7 @@ impl Digester {
             min_freq,
             ignore_n,
             dimerscore,
+            thermo_check,
         );
 
         let seq_slice = self.create_seq_slice();
@@ -220,7 +223,7 @@ impl Digester {
 }
 
 #[pyfunction]
-#[pyo3(signature = (msa_path, ncores, remap, findexes=None, rindexes=None, primer_len_min=None, primer_len_max=None, primer_gc_max=None, primer_gc_min=None, primer_tm_max=None, primer_tm_min=None, primer_annealing_prop=None, annealing_temp_c=None, max_walk=None, max_homopolymers=None, min_freq=None, ignore_n=None, dimerscore=None))]
+#[pyo3(signature = (msa_path, ncores, remap, findexes=None, rindexes=None, primer_len_min=None, primer_len_max=None, primer_gc_max=None, primer_gc_min=None, primer_tm_max=None, primer_tm_min=None, primer_annealing_prop=None, annealing_temp_c=None, max_walk=None, max_homopolymers=None, min_freq=None, ignore_n=None, dimerscore=None, thermo_check=None))]
 fn digest_seq(
     msa_path: &str,
     ncores: usize,
@@ -244,6 +247,7 @@ fn digest_seq(
     min_freq: Option<f64>,
     ignore_n: Option<bool>,
     dimerscore: Option<f64>,
+    thermo_check: Option<bool>,
 ) -> PyResult<(Vec<kmer::FKmer>, Vec<kmer::RKmer>, Vec<String>)> {
     // Start the spinner
     let spinner = ProgressBar::new_spinner();
@@ -272,6 +276,7 @@ fn digest_seq(
         min_freq,
         ignore_n,
         dimerscore,
+        thermo_check,
     );
 
     // Read in the MSA
@@ -454,7 +459,7 @@ fn calc_at_offset_py(seq1: &str, seq2: &str, offset: i32) -> f64 {
 }
 
 #[pymodule]
-fn _core(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
+fn primalschemers(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Object classes
     m.add_class::<kmer::FKmer>()?;
     m.add_class::<kmer::RKmer>()?;

@@ -76,9 +76,7 @@ fn main() {
 
     let seq_array_refs: Vec<&[u8]> = seq_array.iter().map(|seq| seq.as_slice()).collect();
 
-    let dconf = config::DigestConfig::new(
-        None, None, None, None, None, None, None, None, None, None, None, None, None, None,
-    );
+    let dconf = config::DigestConfig::create_default();
 
     pool.install(|| {
         let digested_f: Vec<Result<kmer::FKmer, digest::IndexResult>> =

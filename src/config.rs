@@ -17,12 +17,14 @@ pub struct DigestConfig {
 
     // Thermo mode
     pub thermo_type: ThermoType,
-
     pub max_homopolymers: usize,
     pub max_walk: usize,
     pub min_freq: f64,
     pub ignore_n: bool,
     pub dimerscore: f64,
+
+    // Thermo check
+    pub thermo_check: bool,
 }
 
 impl DigestConfig {
@@ -45,6 +47,7 @@ impl DigestConfig {
         min_freq: Option<f64>,
         ignore_n: Option<bool>,
         dimerscore: Option<f64>,
+        thermo_check: Option<bool>,
     ) -> DigestConfig {
         DigestConfig {
             primer_len_min: primer_len_min.unwrap_or(19),
@@ -65,6 +68,13 @@ impl DigestConfig {
             min_freq: min_freq.unwrap_or(0.0),
             ignore_n: ignore_n.unwrap_or(false),
             dimerscore: dimerscore.unwrap_or(-26.0),
+            thermo_check: thermo_check.unwrap_or(true),
         }
+    }
+    pub fn create_default() -> DigestConfig {
+        DigestConfig::new(
+            None, None, None, None, None, None, None, None, None, None, None, None, None, None,
+            None,
+        )
     }
 }
