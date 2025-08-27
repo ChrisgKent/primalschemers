@@ -12,6 +12,3 @@ rayon = "1.10.0"
 indicatif = {version = "*", features = ["rayon"]}
 itertools = "0.14.0"
 pyo3 = "0.23.3"
-
-[tool.maturin]
-features = ["pyo3/extension-module", "py"]

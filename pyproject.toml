@@ -1,24 +1,24 @@
 [project]
 name = "primalschemers"
-version = "0.1.8"
 description = "Rust code base for PrimalScheme3"
 readme = "README.md"
 authors = [
     { name = "ChrisKent", email = "chrisgkent@protonmail.com" }
 ]
-requires-python = ">=3.9"
-dependencies = []
+requires-python = ">=3.10"
 license = "GPL-3.0-only"
 repository = "https://github.com/chriken/primalschemers"
+classifiers = [
+    "Programming Language :: Rust",
+    "Programming Language :: Python :: Implementation :: CPython",
+    "Programming Language :: Python :: Implementation :: PyPy",
+]
+dynamic = ["version"]
 
-[project.scripts]
-primalschemers = "primalschemers:main"
 
 [tool.maturin]
-module-name = "primalschemers._core"
-python-packages = ["primalschemers"]
-python-source = "src"
+features = ["pyo3/extension-module"]
 
 [build-system]
-requires = ["maturin>=1.0,<2.0"]
+requires = ["maturin>=1.8,<2.0"]
 build-backend = "maturin"
