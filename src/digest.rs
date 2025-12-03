@@ -167,12 +167,7 @@ fn process_seqs(
             Ok(s) => {
                 // If sequence provided check thermo
                 let mut dk = DigestionKmers::new(Some(s), None, v as f64);
-                if dconf.thermo_check {
-                    // If thermo check is enabled, check the sequence
-                    dk._thermo_check(dconf);
-                } else {
-                    dk.status = Some(IndexResult::NotChecked());
-                }
+                dk._thermo_check(dconf);
                 dk
             }
             Err(e) => {
@@ -231,7 +226,7 @@ pub fn opto_binding(
                             .abs();
 
                         // Return the seq with the closest tm
-                        if full_tm_diff >= trunc_tm_diff {
+                        if full_tm_diff > trunc_tm_diff {
                             Ok(truncated_seq.to_vec())
                         } else {
                             Ok(seq)
@@ -265,7 +260,7 @@ pub fn opto_binding(
                         ) - dconf.primer_annealing_prop.unwrap())
                         .abs();
                         // Return the seq with the closest tm
-                        if full_annealing_diff >= trunc_annealing_diff {
+                        if full_annealing_diff > trunc_annealing_diff {
                             Ok(truncated_seq.to_vec())
                         } else {
                             Ok(seq)
@@ -933,10 +928,7 @@ mod tests {
 
     #[test]
     fn test_digest_r_to_count() {
-        let dconf = DigestConfig::new(
-            None, None, None, None, None, None, None, None, None, None, None, None, None, None,
-            None,
-        );
+        let dconf = DigestConfig::create_default();
         let seqs = vec!["ATTAAAGGTTTATACCTTCCCAGGTAACAAACCAACCAACTTTCGATCTCTTGTAGATCT".as_bytes()];
 
         let digested = digest_r_to_count(&seqs, 30, &dconf);
@@ -967,7 +959,7 @@ mod tests {
     fn test_digest_r_at_index_ps3() {
         let dconf = DigestConfig::create_default();
         let seqs =
-            vec!["CCAATGGTGCAAAAGGTATAATCANTAATGTCCAATGGTGCAAAAGGTATAATCATTAATGT".as_bytes()];
+            vec!["CCAATGGTGCAAAAGGTATAATCANTAATGTCCAAGTGGTGCAAGAAGGTATAATCATTAATGT".as_bytes()];
 
         let digested = digest_r_at_index(&seqs, 25, &dconf);
         println!("{:?}", digested);
@@ -981,36 +973,66 @@ mod tests {
         // Match seq
         assert_eq!(
             rkmer.seqs(),
-            vec![
-                std::str::from_utf8("TGATTATACCTTTTGCACCATTGGACATTA".as_bytes())
-                    .unwrap()
-                    .to_string()
-            ]
+            vec![std::str::from_utf8("ACCTTCTTGCACCACTTGGACATTA".as_bytes())
+                .unwrap()
+                .to_string()]
         );
     }
 
     #[test]
     fn test_digest_r_to_count_ambs() {
+        // Tests ambs are handled in the initial kmer slice
         let dconf = DigestConfig::create_default();
-        let seqs = vec!["ATTAAAGGTTTATACCTTCCCAGGTAACAAACCAACCAACTTTRCGATCTCTTGTAGATCT".as_bytes()];
-
-        let digested = digest_r_to_count(&seqs, 30, &dconf);
+        let seqs = vec!["ATTABAAGGTTTATACCTTCCCAGGTAACAAACCAACCAACTTTACGATCTCTTGTAGTCT".as_bytes()];
+        //TTATAAGGTTTATACCTTCCCAGGTAACAAAC
+        //TTACAAGGTTTATACCTTCCCAGGTAACA
+        //TTAGAAGGTTTATACCTTCCCAGGTAACA
+        let digested = digest_r_to_count(&seqs, 1, &dconf);
         // Check num of seqs
-        assert_eq!(digested.len(), 2);
+        assert_eq!(digested.len(), 3);
         // Check count of ambiguous base
         for (_key, count) in digested.iter() {
-            assert_eq!(count, &0.5, "Count: {}", count);
+            assert_eq!(count, &(1.0 / 3.0), "Count: {}", count);
         }
-
-        // Check sequence
+        for seq in digested.keys().into_iter() {
+            println!("{:?}", str::from_utf8(seq.as_ref().unwrap()))
+        }
+        // Check Sequence
+        let expected = vec![
+            "GTTTGTTACCTGGGAAGGTATAAACCTTATAA".as_bytes().to_vec(),
+            "TGTTACCTGGGAAGGTATAAACCTTGTAA".as_bytes().to_vec(),
+            "TGTTACCTGGGAAGGTATAAACCTTCTAA".as_bytes().to_vec(),
+        ];
+        for e in expected.into_iter() {
+            assert!(digested.contains_key(&Ok(e)),)
+        }
+    }
+    #[test]
+    fn test_digest_r_to_count_ambs_ext() {
+        let dconf = DigestConfig::create_default();
         let seqs =
             vec!["ATTAAAGGTTTATACCTTCCCAGGTAACAAACCAACCAACTTTRCYGATCTCTTGTAGATCT".as_bytes()];
+        // rc"AGATCTACAAGAGATCRGYAAAGTTGGTTGGTTTGTTACCTGGGAAGGTATAAACCTTTAAT"
         let digested = digest_r_to_count(&seqs, 30, &dconf);
         // Check num of seqs
         assert_eq!(digested.len(), 4);
         // Check count of ambiguous base
         for (_key, count) in digested.iter() {
             assert_eq!(count, &0.25, "Count: {}", count);
+        }
+
+        for seq in digested.keys().into_iter() {
+            println!("{:?}", str::from_utf8(seq.as_ref().unwrap()))
+        }
+        // Check Sequence
+        let expected = vec![
+            "ACAAGAGATCGGTAAAGTTGGTTGGT".as_bytes().to_vec(),
+            "CAAGAGATCAGCAAAGTTGGTTGGT".as_bytes().to_vec(),
+            "AGAGATCGGCAAAGTTGGTTGGT".as_bytes().to_vec(),
+            "TCTACAAGAGATCAGTAAAGTTGGTTGGT".as_bytes().to_vec(),
+        ];
+        for e in expected.into_iter() {
+            assert!(digested.contains_key(&Ok(e)),)
         }
     }
 
@@ -1065,23 +1087,25 @@ mod tests {
     #[test]
     fn test_digest_f_to_count_ambs() {
         let dconf = DigestConfig::create_default();
-        let seqs = vec!["ATTAAAGGTTTATACCTTCCCAGGTAACAAACCAACCAARTTTCGATCTCTTGTAGATCT".as_bytes()];
+        let seqs = vec!["ATTAAAGGTTTATACCTTCCCAGGTAACAAACCAACCAABTTTCGATCTCTTGTAGATCT".as_bytes()];
 
         let digested = digest_f_to_count(&seqs, 40, &dconf);
 
         // Check num of seqs
-        assert_eq!(digested.len(), 2);
+        assert_eq!(digested.len(), 3);
         // Check count of ambiguous base
         for (_key, count) in digested.iter() {
-            assert_eq!(count, &0.5, "Count: {}", count);
+            assert_eq!(count, &(1.0 / 3.0), "Count: {}", count);
         }
+        println!("{:?}", digested);
         // Check sequences
         let expected = vec![
             "CTTCCCAGGTAACAAACCAACCAAT".as_bytes().to_vec(),
             "TTCCCAGGTAACAAACCAACCAAC".as_bytes().to_vec(),
+            "CTTCCCAGGTAACAAACCAACCAAG".as_bytes().to_vec(),
         ];
         for e in expected.into_iter() {
-            assert!(digested.contains_key(&Ok(e)))
+            assert!(digested.contains_key(&Ok(e)),)
         }
 
         // Check sequence
@@ -1098,15 +1122,30 @@ mod tests {
     #[test]
     fn test_digest_f_to_count_ambs_extend() {
         let dconf = DigestConfig::create_default();
-        let seqs = vec!["ATTAAAGGTTTATACCTTCCCAGGTAACAAACCAACCRARTTTCGATCTCTTGTAGATCT".as_bytes()];
+        let seqs = vec!["ATTAAAGGTTTATACCTTCCCAGGTAACAAACCAACCBARTTTCGATCTCTTGTAGATCT".as_bytes()];
         // Check that appending amb bases works as expected
         let digested = digest_f_to_count(&seqs, 60, &dconf);
         // Check num of seqs
-        assert_eq!(digested.len(), 4);
+        assert_eq!(digested.len(), 6);
 
         // Check freqs
         for (_key, count) in digested.iter() {
             assert_eq!(*count, 1.0 / digested.len() as f64, "Count: {}", count);
+        }
+        for seq in digested.keys().into_iter() {
+            println!("{:?}", str::from_utf8(seq.as_ref().unwrap()))
+        }
+        // Check Sequence
+        let expected = vec![
+            "CCAACCTAGTTTCGATCTCTTGTAGATCT".as_bytes().to_vec(),
+            "AACCGAGTTTCGATCTCTTGTAGATCT".as_bytes().to_vec(),
+            "ACCAACCTAATTTCGATCTCTTGTAGATCT".as_bytes().to_vec(),
+            "CAACCGAATTTCGATCTCTTGTAGATCT".as_bytes().to_vec(),
+            "AACCCAGTTTCGATCTCTTGTAGATCT".as_bytes().to_vec(),
+            "CAACCCAATTTCGATCTCTTGTAGATCT".as_bytes().to_vec(),
+        ];
+        for e in expected.into_iter() {
+            assert!(digested.contains_key(&Ok(e)),)
         }
     }
 

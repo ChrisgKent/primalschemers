@@ -4,6 +4,19 @@ pub fn complement_base(base: u8) -> u8 {
         b'T' => b'A',
         b'G' => b'C',
         b'C' => b'G',
+        b'M' => b'K',
+        b'R' => b'Y',
+        b'W' => b'W',
+        b'S' => b'S',
+        b'Y' => b'R',
+        b'K' => b'M',
+        b'V' => b'B',
+        b'H' => b'D',
+        b'D' => b'H',
+        b'B' => b'V',
+        b'X' => b'X',
+        b'N' => b'N',
+        b'-' => b'-',
         _ => base,
     }
 }
@@ -200,7 +213,8 @@ mod tests {
     fn test_expand_amb_sequence() {
         let seq = b"ATCG";
         let expanded = expand_amb_sequence(seq);
-        assert_eq!(expanded.unwrap().len(), 1);
+        assert_eq!(expanded.as_ref().unwrap().len(), 1);
+        assert_eq!(expanded, Some(vec![b"ATCG".to_vec()]));
 
         let seq = b"ATCGR";
         let expanded = expand_amb_sequence(seq);
