@@ -442,7 +442,7 @@ pub fn oligo_thermo(
     dmso_conc: f64,
     dmso_fact: f64,
     formamide_conc: f64,
-    annealing_temp: f64,
+    annealing_temp_c: f64,
     tm_method: TmMethod,
 ) -> (f64, f64) {
     // Todo Salt correction
@@ -559,9 +559,9 @@ pub fn oligo_thermo(
     tm += (0.453 * ((gc_count / oligo_int.len()) as f64) - 2.88) * formamide_conc;
 
     // Calc bound
-    if annealing_temp > 0.0 {
-        let ddg = delta_h - (annealing_temp + T_KELVIN) * delta_s;
-        let ka = ((-ddg) / (1.987 * (annealing_temp + T_KELVIN))).exp();
+    if annealing_temp_c > 0.0 {
+        let ddg = delta_h - (annealing_temp_c + T_KELVIN) * delta_s;
+        let ka = ((-ddg) / (1.987 * (annealing_temp_c + T_KELVIN))).exp();
         bound = (1.0 / (1.0 + (1.0 / ((dna_nm / dna_sym_adj) * ka)).sqrt())) * 100.0;
     }
 
@@ -616,7 +616,7 @@ pub fn oligo_annealing_utf8(
     dmso_conc: f64,
     dmso_fact: f64,
     formamide_conc: f64,
-    annealing_temp: f64,
+    annealing_temp_c: f64,
     tm_method: TmMethod,
 ) -> f64 {
     oligo_thermo(
@@ -628,7 +628,7 @@ pub fn oligo_annealing_utf8(
         dmso_conc,
         dmso_fact,
         formamide_conc,
-        annealing_temp,
+        annealing_temp_c,
         tm_method,
     )
     .1

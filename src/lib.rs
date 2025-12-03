@@ -5,7 +5,7 @@ use pyo3::prelude::*;
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use std::{collections::HashMap, time::Duration};
 
-use crate::digest::thermo_check;
+use crate::tm::TmMethod;
 
 pub mod config;
 pub mod digest;
@@ -39,7 +39,7 @@ impl Digester {
         let (_headers, seqs) = seqio::fasta_reader(&msa_path);
 
         // parse the fasta to a seq array
-        let mut _seq_array = seqs
+        let mut _seq_array: Vec<Vec<u8>> = seqs
             .iter()
             .map(|s| s.as_bytes().to_vec())
             .collect::<Vec<Vec<u8>>>();
@@ -48,7 +48,7 @@ impl Digester {
         // Create the mapping array
         let _mapping_array: Vec<Option<usize>> =
             mapping::create_mapping_array(&seqs[0].as_bytes(), remap);
-        let _ref_to_msa_array = mapping::create_ref_to_msa(&_mapping_array);
+        let _ref_to_msa_array: Vec<usize> = mapping::create_ref_to_msa(&_mapping_array);
 
         // Return the Digester
         Digester {
@@ -458,6 +458,32 @@ fn calc_at_offset_py(seq1: &str, seq2: &str, offset: i32) -> f64 {
     };
 }
 
+#[pyfunction]
+fn calc_annealing(
+    sequence: &str,
+    dna_nm: f64,
+    k_mm: f64,
+    divalent_conc: f64,
+    dntp_conc: f64,
+    dmso_conc: f64,
+    dmso_fact: f64,
+    formamide_conc: f64,
+    annealing_temp_c: f64,
+) -> f64 {
+    tm::oligo_annealing_utf8(
+        sequence.as_bytes(),
+        dna_nm,
+        k_mm,
+        divalent_conc,
+        dntp_conc,
+        dmso_conc,
+        dmso_fact,
+        formamide_conc,
+        annealing_temp_c,
+        TmMethod::SantaLucia2004,
+    )
+}
+
 #[pymodule]
 fn primalschemers(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Object classes
@@ -471,6 +497,9 @@ fn primalschemers(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(do_seqs_interact, m)?)?;
     m.add_function(wrap_pyfunction!(do_pool_interact, m)?)?;
     m.add_function(wrap_pyfunction!(kmer::generate_primerpairs_py, m)?)?;
+
+    // Thermo
+    m.add_function(wrap_pyfunction!(calc_annealing, m)?)?;
 
     Ok(())
 }
