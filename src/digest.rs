@@ -74,6 +74,11 @@ impl DigestionKmers {
         self.count / total
     }
     pub fn _thermo_check(&mut self, dconf: &DigestConfig) -> &Option<IndexResult> {
+        // If not check skip all checks
+        if !dconf.thermo_check {
+            self.status = Some(IndexResult::NotChecked());
+            return &self.status;
+        }
         // Returns the None if valid primer
         let result = match &self.seq {
             Some(seq) => match thermo_check(&seq, dconf) {
@@ -515,7 +520,9 @@ pub fn digest_r_at_index(
     let dks: Vec<DigestionKmers> = dks.into_iter().filter(|dk| dk.seq.is_some()).collect();
     let counts = dks.iter().map(|dk| dk.count).collect::<Vec<f64>>();
     let seqs = dks.into_iter().map(|dk| dk.seq.unwrap()).collect();
-    if primaldimer::do_pool_interact_u8(&seqs, &seqs, dconf.dimerscore) {
+
+    // Skip dimer checks is no-thermo
+    if dconf.thermo_check && primaldimer::do_pool_interact_u8(&seqs, &seqs, dconf.dimerscore) {
         return Err(IndexResult::ThermoResult(ThermoResult::PrimerDimer));
     }
 
@@ -848,7 +855,8 @@ fn digest_f_at_index(
 
     let counts = dks.iter().map(|dk| dk.count).collect::<Vec<f64>>();
     let seqs = dks.into_iter().map(|dk| dk.seq.unwrap()).collect();
-    if primaldimer::do_pool_interact_u8(&seqs, &seqs, dconf.dimerscore) {
+    // Skip dimer checks is no-thermo
+    if dconf.thermo_check && primaldimer::do_pool_interact_u8(&seqs, &seqs, dconf.dimerscore) {
         return Err(IndexResult::ThermoResult(ThermoResult::PrimerDimer));
     }
     if seqs.len() == 0 {
