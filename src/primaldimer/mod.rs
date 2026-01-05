@@ -92,27 +92,36 @@ pub fn decode_base(encoded_base: &[usize]) -> String {
     return decoded_base;
 }
 
-fn calc_dangling_ends_stability(seq1: &[u8], seq2: &[u8], mapping: &Vec<(usize, usize)>) -> f64 {
+fn calc_dangling_ends_stability(
+    seq1: &[u8],
+    seq2: &[u8],
+    start_x: usize,
+    end_x: usize,
+    offset: i32,
+) -> f64 {
     let mut dg_score = 0.;
 
     // Look for overhang on the right side
-    let (seq2_i, seq1_i) = mapping[mapping.len() - 1];
+    let last_x = end_x - 1;
+    let last_s2_idx = (last_x as i32 + offset) as usize;
 
-    match scores::seq2_overhang_dg(&seq1[seq1_i], &seq2[seq2_i], &seq2[seq2_i + 1]) {
+    match scores::seq2_overhang_dg(&seq1[last_x], &seq2[last_s2_idx], &seq2[last_s2_idx + 1]) {
         Some(score) => dg_score += score,
         None => dg_score += BONUS_ARRAY[2],
     }
 
     // Look for overhang on the leftside
-    let (seq2_i, seq1_i) = mapping[0];
+    let first_x = start_x;
+    let first_s2_idx = (first_x as i32 + offset) as usize;
 
-    if seq1_i > 0 {
-        match scores::seq1_overhang_dg(&seq1[seq1_i], &seq2[seq2_i], &seq1[seq1_i - 1]) {
+    if first_x > 0 {
+        match scores::seq1_overhang_dg(&seq1[first_x], &seq2[first_s2_idx], &seq1[first_x - 1]) {
             Some(score) => dg_score += score,
             None => dg_score += BONUS_ARRAY[1],
         }
-    } else if seq2_i > 0 {
-        match scores::seq2_overhang_dg(&seq1[seq1_i], &seq2[seq2_i], &seq2[seq2_i - 1]) {
+    } else if first_s2_idx > 0 {
+        match scores::seq2_overhang_dg(&seq1[first_x], &seq2[first_s2_idx], &seq2[first_s2_idx - 1])
+        {
             Some(score) => dg_score += score,
             None => dg_score += BONUS_ARRAY[1],
         }
@@ -121,10 +130,11 @@ fn calc_dangling_ends_stability(seq1: &[u8], seq2: &[u8], mapping: &Vec<(usize, 
     return dg_score;
 }
 
-fn calc_nn_thermo(seq1: &[u8], seq2: &[u8], mapping: &Vec<(usize, usize)>) -> f64 {
+fn calc_nn_thermo(seq1: &[u8], seq2: &[u8], start_x: usize, end_x: usize, offset: i32) -> f64 {
     let mut dg_score: f64 = 0.;
-    for (seq2_i, seq1_i) in mapping.iter() {
-        match nn_dg_scores(&seq1[*seq1_i..*seq1_i + 2], &seq2[*seq2_i..*seq2_i + 2]) {
+    for x in start_x..end_x {
+        let s2_idx = (x as i32 + offset) as usize;
+        match nn_dg_scores(&seq1[x..x + 2], &seq2[s2_idx..s2_idx + 2]) {
             Some(score) => dg_score += score,
             None => dg_score += BONUS_ARRAY[6],
         }
@@ -132,124 +142,174 @@ fn calc_nn_thermo(seq1: &[u8], seq2: &[u8], mapping: &Vec<(usize, usize)>) -> f6
     return dg_score;
 }
 
-fn calc_extension(seq1: &[u8], match_bool: &Vec<bool>) -> Option<f64> {
-    // Guard for no matches in final two 3' bases
-    if !match_bool[match_bool.len() - 2..].iter().any(|f| *f) {
-        return None;
-    }
+fn calc_extension(
+    seq1: &[u8],
+    seq2: &[u8],
+    start_x: usize,
+    end_x: usize,
+    offset: i32,
+) -> Option<f64> {
+    // Note: Early exit check is done in calc_at_offset.
+    // We proceed to calculate score.
 
     let mut score: f64 = 0.;
+    let len = end_x - start_x;
+    let check_len = len.min(4);
+    let mut all_match = true;
 
-    let kmer_3p_bool: Vec<(usize, &bool)> = match_bool
-        .iter()
-        .rev()
-        .enumerate()
-        .filter(|(index, _bool)| *index < 4)
-        .collect();
+    for i in 0..check_len {
+        let x = end_x - 1 - i;
+        let s2_idx = (x as i32 + offset) as usize;
+        let is_match = scores::match_array(seq1[x], seq2[s2_idx]);
 
-    // Look at the last 4 bases in the match
+        if !is_match {
+            all_match = false;
+        }
 
-    for (index, match_bool) in kmer_3p_bool.iter() {
-        let seq1_index = seq1.len() - 1 - index;
-        // Only count matches
-        if **match_bool {
+        if is_match {
             // Add match score
-            match seq1[seq1_index] {
-                b'G' | b'C' => score += 3. * (1. / (index + 1) as f64), // CG match
-                b'A' | b'T' => score += 2. * (1. / (index + 1) as f64), // AT match
+            match seq1[x] {
+                b'G' | b'C' => score += 3. * (1. / (i + 1) as f64), // CG match
+                b'A' | b'T' => score += 2. * (1. / (i + 1) as f64), // AT match
                 _ => continue,
             }
         }
     }
 
-    if kmer_3p_bool.iter().all(|(_index, bool)| **bool) {
+    if all_match && (check_len == 4 || len < 4) {
         score += 2.;
     }
 
     return Some(-score);
 }
 
-fn apply_bonus(match_bool: &Vec<bool>) -> f64 {
-    // Find the longest continous match
+fn apply_bonus(seq1: &[u8], seq2: &[u8], start_x: usize, end_x: usize, offset: i32) -> f64 {
     let mut current_match = 0;
     let mut longest_match = 0;
+    let mut match_count = 0;
+    let total_len = end_x - start_x;
 
-    for m in match_bool.iter() {
-        match m {
-            true => current_match += 1,
-            false => current_match = 0,
+    // For bubbles
+    let mut current_run_val = false;
+    let mut current_run_count = 0;
+    let mut bubble_score = 0.;
+
+    for x in start_x..end_x {
+        let s2_idx = (x as i32 + offset) as usize;
+        let is_match = scores::match_array(seq1[x], seq2[s2_idx]);
+
+        // Longest match logic
+        if is_match {
+            current_match += 1;
+            match_count += 1;
+        } else {
+            current_match = 0;
         }
         if current_match > longest_match {
-            longest_match = current_match
+            longest_match = current_match;
+        }
+
+        // Bubble logic
+        if x == start_x {
+            current_run_val = is_match;
+            current_run_count = 1;
+        } else {
+            if is_match == current_run_val {
+                current_run_count += 1;
+            } else {
+                // Process previous run
+                if !current_run_val && current_run_count > 2 {
+                    bubble_score +=
+                        -((current_run_count as f64 - 2.) * BONUS_ARRAY[0]) * BONUS_ARRAY[9];
+                }
+                // Reset
+                current_run_val = is_match;
+                current_run_count = 1;
+            }
         }
     }
+    // Process last run for bubbles
+    if total_len > 0 {
+        if !current_run_val && current_run_count > 2 {
+            bubble_score += -((current_run_count as f64 - 2.) * BONUS_ARRAY[0]) * BONUS_ARRAY[9];
+        }
+    }
+
     let mut score = 0.;
 
     // Find proportion of matches
-    score += -((0.8
-        - (match_bool.iter().filter(|b| **b).count() as f64 / match_bool.len() as f64))
-        * BONUS_ARRAY[8]);
-
-    // Group the match bool
-    let grouped_match_bool: Vec<(bool, usize)> = match_bool
-        .iter()
-        .chunk_by(|bool| **bool)
-        .into_iter()
-        .map(|(bool, iter)| (bool, iter.count()))
-        .collect();
-
-    // Work out the longest match
-    let longest_match = grouped_match_bool
-        .iter()
-        .filter(|(bool, _count)| *bool)
-        .map(|(_bool, count)| count)
-        .max();
-
-    match longest_match {
-        Some(max) => score += -(*max as f64 * BONUS_ARRAY[7]),
-        None => (),
+    if total_len > 0 {
+        score += -((0.8 - (match_count as f64 / total_len as f64)) * BONUS_ARRAY[8]);
     }
+
+    // Longest match
+    score += -(longest_match as f64 * BONUS_ARRAY[7]);
 
     // Resolve bubbles
-    for (match_bool, count) in grouped_match_bool.iter() {
-        if !*match_bool && count > &2 {
-            score += -((*count as f64 - 2.) * BONUS_ARRAY[0]) * BONUS_ARRAY[9]
-        }
-    }
+    score += bubble_score;
 
     return score;
 }
 
 pub fn calc_at_offset(seq1: &[u8], seq2: &[u8], offset: i32) -> Option<f64> {
-    // Create the mapping
-    let mut mapping: Vec<(usize, usize)> = Vec::with_capacity(seq1.len().max(seq2.len()));
+    // Calculate bounds
+    let start_x_signed = if offset < 0 { -offset } else { 0 };
+    let start_x = start_x_signed as usize;
 
-    for x in 0..seq1.len() {
-        let seq2_index = x as i32 + offset;
-        if seq2_index >= 0 && (seq2_index as usize) < seq2.len() - 1 {
-            mapping.push((seq2_index as usize, x))
-        }
+    // seq2_index < seq2.len() - 1
+    // x + offset < seq2.len() - 1
+    // x < seq2.len() - 1 - offset
+    let max_seq2_idx = seq2.len().saturating_sub(1);
+    let end_x_limit = max_seq2_idx as i32 - offset;
+
+    if end_x_limit <= 0 {
+        return None;
     }
 
-    // Create the match_bool
-    let match_bool = mapping
-        .iter()
-        .map(|(seq2i, seq1i)| scores::match_array(seq1[*seq1i], seq2[*seq2i]))
-        .collect();
+    let end_x = seq1.len().min(end_x_limit as usize);
 
-    let mut dg_score = calc_dangling_ends_stability(&seq1, &seq2, &mapping);
+    if start_x >= end_x {
+        return None;
+    }
 
-    match calc_extension(seq1, &match_bool) {
+    // Early exit check (3' end)
+    // Last element is at end_x - 1
+    let last_x = end_x - 1;
+    let last_s2_idx = (last_x as i32 + offset) as usize;
+    let last_match = scores::match_array(seq1[last_x], seq2[last_s2_idx]);
+
+    let second_last_match = if last_x > start_x {
+        let prev_x = last_x - 1;
+        let prev_s2_idx = (prev_x as i32 + offset) as usize;
+        scores::match_array(seq1[prev_x], seq2[prev_s2_idx])
+    } else {
+        false
+    };
+
+    if !last_match && !second_last_match {
+        return None;
+    }
+
+    // Now calculate scores without allocations
+
+    // 1. Dangling ends
+    let mut dg_score = calc_dangling_ends_stability(seq1, seq2, start_x, end_x, offset);
+
+    // 2. Extension
+    match calc_extension(seq1, seq2, start_x, end_x, offset) {
         Some(score) => dg_score += score,
         None => return None,
     };
 
-    // Apply longest match, and match proportion
-    dg_score += apply_bonus(&match_bool);
+    // 3. Bonus
+    dg_score += apply_bonus(seq1, seq2, start_x, end_x, offset);
 
-    // Remove the end element of mapping before giving to NN
-    mapping.pop();
-    dg_score += calc_nn_thermo(seq1, seq2, &mapping);
+    // 4. NN Thermo
+    // Note: original code did mapping.pop() before NN thermo.
+    // So we pass end_x - 1 to NN thermo.
+    if end_x > start_x {
+        dg_score += calc_nn_thermo(seq1, seq2, start_x, end_x - 1, offset);
+    }
 
     return Some(dg_score);
 }
@@ -354,4 +414,150 @@ pub fn do_pool_interact_u8_slice(seqs1: &Vec<&[u8]>, seqs2: &Vec<&[u8]>, t: f64)
         }
     }
     false
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn test_valid_encode_base() {
+        let seq = "ATCG";
+
+        // base_to_encode = {"A": 0, "T": 3, "C": 1, "G": 2}
+        assert_eq!(encode_base(seq), vec![0, 3, 1, 2])
+    }
+    #[test]
+    #[should_panic]
+    fn test_invalid_encode_base() {
+        encode_base("z");
+    }
+    #[test]
+    fn test_all_match() {
+        // Set up values
+        let seq1 = "ACGAT";
+        let seq2 = "TGCTA";
+        let offset = 0;
+
+        let mut pred_score: f64 = 0.;
+
+        // AC / TG match
+        pred_score += scores::nn_dg_scores(b"AC", b"TG").unwrap_or(0.);
+        // CG / GC match
+        pred_score += scores::nn_dg_scores(b"CG", b"GC").unwrap_or(0.);
+        // GA / CT match
+        pred_score += scores::nn_dg_scores(b"GA", b"CT").unwrap_or(0.);
+        // AT / TA match
+        pred_score += scores::nn_dg_scores(b"AT", b"TA").unwrap_or(0.);
+
+        assert_eq!(
+            calc_nn_thermo(seq1.as_bytes(), seq2.as_bytes(), 0, seq1.len() - 1, offset),
+            pred_score
+        )
+    }
+    #[test]
+    fn test_mismatch_with_offset() {
+        // Set up values
+        //   ACCTC
+        //   |||.|
+        // ACTGGTGCTAC
+        let seq1 = "ACCTC";
+        let seq2 = "ACTGGTGCTAC";
+        let offset = 2;
+
+        let mut pred_score = 0.;
+
+        // AC / TG match
+        pred_score += scores::nn_dg_scores(b"AC", b"TG").unwrap_or(0.);
+        // CC / GG  match
+        pred_score += scores::nn_dg_scores(b"CC", b"GG").unwrap_or(0.);
+        // CT / GT mismatch
+        pred_score += scores::nn_dg_scores(b"CT", b"GT").unwrap_or(0.);
+        // TC / TG mismatch
+        pred_score += scores::nn_dg_scores(b"TC", b"TG").unwrap_or(0.);
+
+        assert_eq!(
+            calc_nn_thermo(seq1.as_bytes(), seq2.as_bytes(), 0, seq1.len() - 1, offset),
+            pred_score
+        )
+    }
+    #[test]
+    fn test_match_array() {
+        // MATCHES
+        // A / T
+        assert!(scores::match_array(b'A', b'T'));
+        // T / A
+        assert!(scores::match_array(b'T', b'A'));
+        // C / G
+        assert!(scores::match_array(b'C', b'G'));
+        // G / C
+        assert!(scores::match_array(b'G', b'C'));
+        // MISMATCHES
+        // A / A
+        assert_eq!(scores::match_array(b'A', b'A'), false);
+        // A / C
+        assert_eq!(scores::match_array(b'A', b'C'), false);
+        // A / G
+        assert_eq!(scores::match_array(b'A', b'G'), false);
+
+        // T / T
+        assert_eq!(scores::match_array(b'T', b'T'), false);
+        // T / C
+        assert_eq!(scores::match_array(b'T', b'C'), false);
+        // T / G
+        assert_eq!(scores::match_array(b'T', b'G'), false);
+
+        // C / C
+        assert_eq!(scores::match_array(b'C', b'C'), false);
+        // C / A
+        assert_eq!(scores::match_array(b'C', b'A'), false);
+        // C / T
+        assert_eq!(scores::match_array(b'C', b'T'), false);
+
+        // G / G
+        assert_eq!(scores::match_array(b'G', b'G'), false);
+        // G / A
+        assert_eq!(scores::match_array(b'G', b'A'), false);
+        // G / T
+        assert_eq!(scores::match_array(b'G', b'T'), false);
+    }
+    #[test]
+    fn test_ensure_consistant_result() {
+        // nCoV-2019_76_RIGHT_0 nCoV-2019_18_LEFT_0
+        // score: -40.74 (-40.736826004)
+        // 5'-ACACCTGTGCCTGTTAAACCAT-3' >
+        //                ||||||||||
+        //             3'-CAATTTGGTAATTGAACACCCATAAAGGT-5'
+
+        let s1 = "ACACCTGTGCCTGTTAAACCAT"; //5'-3'
+        let s2 = "CAATTTGGTAATTGAACACCCATAAAGGT"; //3'-5'
+        let offset = -12;
+
+        assert_eq!(
+            super::calc_at_offset(s1.as_bytes(), s2.as_bytes(), offset),
+            Some(-40.736826004)
+        );
+    }
+    #[test]
+    fn test_ensure_detection() {
+        // nCoV-2019_76_RIGHT_0 nCoV-2019_18_LEFT_0
+        // score: -40.74 (-40.736826004)
+        // 5'-ACACCTGTGCCTGTTAAACCAT-3' >
+        //                ||||||||||
+        //             3'-CAATTTGGTAATTGAACACCCATAAAGGT-5'
+
+        let s1 = "ACACCTGTGCCTGTTAAACCAT"; //5'-3'
+        let s2 = "TGGAAATACCCACAAGTTAATGGTTTAAC"; //5'-3'
+        let threshold = -27.0;
+
+        assert!(super::does_seq1_extend(
+            s1.as_bytes(),
+            s2.as_bytes(),
+            threshold,
+        ));
+    }
+    #[test]
+    fn test_encode_decode() {
+        // Test round trip encoding and decoding
+        let seq = "CTCTTGTAGATCTGTTCTCTAAACGAACTTT";
+        assert_eq!(decode_base(&encode_base(seq)), seq);
+    }
 }
