@@ -1,14 +1,21 @@
 [package]
 name = "primalschemers"
-version = "0.1.10"
+version = "0.1.11"
 edition = "2021"
 
 [lib]
 name = "primalschemers"
-crate-type = ["cdylib"]
+crate-type = ["cdylib", "lib"]
 
 [dependencies]
 rayon = "1.10.0"
 indicatif = {version = "*", features = ["rayon"]}
 itertools = "0.14.0"
 pyo3 = "0.27.2"
+
+[dev-dependencies]
+criterion = "0.5"
+
+[[bench]]
+name = "dimer_bench"
+harness = false
