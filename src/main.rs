@@ -4,6 +4,7 @@ pub mod config;
 pub mod digest;
 pub mod kmer;
 pub mod mapping;
+pub mod msa;
 pub mod primaldimer;
 pub mod seqfuncs;
 pub mod seqio;

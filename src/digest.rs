@@ -283,6 +283,35 @@ pub fn opto_binding(
     return return_map;
 }
 
+pub fn dedup_substr(
+    mut seq_counts: HashMap<Result<Vec<u8>, DigestError>, f64>,
+) -> HashMap<Result<Vec<u8>, DigestError>, f64> {
+    // Check if the truncated version of the sequence is present.
+    let keys: Vec<Vec<u8>> = seq_counts
+        .keys()
+        .filter_map(|k| k.as_ref().ok().cloned())
+        .collect();
+
+    for seq in keys {
+        if seq.len() < 2 {
+            continue;
+        }
+        // Check if the [1:] slice exists
+        let sub = seq[1..].to_vec();
+        let sub_key = Ok(sub);
+
+        if seq_counts.contains_key(&sub_key) {
+            // If it does, add the original count to sub sequence
+            if let Some(val) = seq_counts.remove(&Ok(seq)) {
+                if let Some(count) = seq_counts.get_mut(&sub_key) {
+                    *count += val;
+                }
+            }
+        }
+    }
+    return seq_counts;
+}
+
 pub fn walk_right(
     seq: &[u8],
     l_index: usize,
@@ -472,7 +501,9 @@ pub fn digest_r_to_count(
         rc_kmer_count.insert(r, v);
     }
     // Finally return opto kmers
-    opto_binding(rc_kmer_count, dconf)
+    let opto_seq_count = opto_binding(rc_kmer_count, dconf);
+    // Deduplicate
+    dedup_substr(opto_seq_count)
 }
 
 pub fn digest_r_at_index(
@@ -805,7 +836,10 @@ pub fn digest_f_to_count(
     }
 
     // Finally return opto kmers
-    opto_binding(un_reversed, dconf)
+
+    let opto_seq_count = opto_binding(un_reversed, dconf);
+    // Deduplicate
+    dedup_substr(opto_seq_count)
 }
 
 fn digest_f_at_index(
@@ -1277,5 +1311,95 @@ mod tests {
         // Check truncated from 5' end
         assert_eq!(*processed_map.keys().next().unwrap(), Ok(seq1));
         assert_eq!(*processed_map.values().next().unwrap(), seq_count);
+    }
+    #[test]
+    fn test_opto_binding_dedeup() {
+        // Test to show that elements made to be duplicates by truncation are correctly combined.
+        let mut dconf = DigestConfig::create_default();
+        dconf.annealing_temp_c = 65.0;
+        dconf.primer_annealing_prop = Some(0.0); // Very low annealing forces truncation.
+        dconf.thermo_type = ThermoType::ANNEALING;
+
+        let seqs = vec![
+            "GGGTTGTGATGGTGGCAGTTTGTA".as_bytes().to_vec(),
+            "TGGTTGTGATGGTGGCAGTTTGTA".as_bytes().to_vec(),
+        ];
+
+        let mut count_map: HashMap<Result<Vec<u8>, DigestError>, f64> = HashMap::new();
+        for seq in seqs.into_iter() {
+            count_map.insert(Ok(seq), 1.0);
+        }
+        // Opto the sequences
+        let processed_map = opto_binding(count_map.clone(), &dconf);
+
+        for seq in processed_map.keys().into_iter() {
+            println!("{:?}", str::from_utf8(seq.as_ref().unwrap()))
+        }
+
+        // Check wanted seqs are present
+        let wanted_seqs = vec!["GGTTGTGATGGTGGCAGTTTGTA".as_bytes().to_vec()];
+        for wseq in wanted_seqs.into_iter() {
+            assert_eq!(processed_map.contains_key(&Ok(wseq.clone())), true);
+            assert_eq!(processed_map.get(&Ok(wseq)), Some(&2.0));
+        }
+    }
+    #[test]
+    fn test_opto_binding_dedeup2() {
+        // This example ends in seq1 being trucated but seq2 not. Therefore, seq1 ends up as a subseq of seq2.
+        let mut dconf = DigestConfig::create_default();
+        dconf.annealing_temp_c = 65.0;
+        dconf.primer_annealing_prop = Some(30.0);
+        dconf.thermo_type = ThermoType::ANNEALING;
+
+        let seqs = vec![
+            "GGGTTGTGATGGTGGCAGTTTGTA".as_bytes().to_vec(),
+            "TGGTTGTGATGGTGGCAGTTTGTA".as_bytes().to_vec(),
+        ];
+
+        let wanted_seqs = vec![
+            "GGTTGTGATGGTGGCAGTTTGTA".as_bytes().to_vec(),
+            "TGGTTGTGATGGTGGCAGTTTGTA".as_bytes().to_vec(),
+        ];
+
+        let mut count_map: HashMap<Result<Vec<u8>, DigestError>, f64> = HashMap::new();
+        for seq in seqs.into_iter() {
+            count_map.insert(Ok(seq), 1.0);
+        }
+        // Opto the sequences
+        let processed_map = opto_binding(count_map.clone(), &dconf);
+
+        for seq in processed_map.keys().into_iter() {
+            println!("{:?}", str::from_utf8(seq.as_ref().unwrap()))
+        }
+        // Check wanted seqs are present
+        for wseq in wanted_seqs.into_iter() {
+            assert_eq!(processed_map.contains_key(&Ok(wseq.clone())), true);
+
+            assert_eq!(processed_map.get(&Ok(wseq)), Some(&1.0));
+        }
+    }
+
+    #[test]
+    fn test_dedup_substr() {
+        let seqs = vec![
+            "GGTTGTGATGGTGGCAGTTTGTA".as_bytes().to_vec(),
+            "TGGTTGTGATGGTGGCAGTTTGTA".as_bytes().to_vec(),
+        ];
+
+        let mut count_map: HashMap<Result<Vec<u8>, DigestError>, f64> = HashMap::new();
+        for seq in seqs.into_iter() {
+            count_map.insert(Ok(seq), 1.0);
+        }
+
+        // Run dedup_substr
+        count_map = dedup_substr(count_map);
+
+        // Check outputs
+        let wanted_seqs = vec!["GGTTGTGATGGTGGCAGTTTGTA".as_bytes().to_vec()];
+        assert_eq!(count_map.len(), 1);
+        for wseq in wanted_seqs.into_iter() {
+            assert_eq!(count_map.contains_key(&Ok(wseq.clone())), true);
+            assert_eq!(count_map.get(&Ok(wseq)), Some(&2.0));
+        }
     }
 }
