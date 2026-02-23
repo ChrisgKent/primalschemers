@@ -19,8 +19,6 @@ static DMSO_CONC: f64 = 0.0;
 static DMSO_FACT: f64 = 0.0;
 static FORMAMIDE_CONC: f64 = 0.8;
 
-static ANNEALING_DIFF: f64 = 5.0;
-
 #[derive(Eq, PartialEq, Hash, Debug, Clone)]
 pub enum DigestError {
     InvalidBase,
@@ -149,10 +147,10 @@ pub fn thermo_check(kmer: &[u8], dconf: &DigestConfig) -> ThermoResult {
                 tm::TmMethod::SantaLucia2004,
             );
 
-            if prop > dconf.primer_annealing_prop.unwrap() + ANNEALING_DIFF {
+            if prop > dconf.primer_annealing_prop.unwrap() + dconf.annealing_diff {
                 return ThermoResult::HighAnnealing;
             }
-            if prop < dconf.primer_annealing_prop.unwrap() - ANNEALING_DIFF {
+            if prop < dconf.primer_annealing_prop.unwrap() - dconf.annealing_diff {
                 return ThermoResult::LowAnnealing;
             }
         }

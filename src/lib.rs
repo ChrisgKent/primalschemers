@@ -66,7 +66,7 @@ impl Digester {
             .collect::<Vec<&[u8]>>()
     }
 
-    #[pyo3(signature = (findexes=None, rindexes=None, primer_len_min=None, primer_len_max=None, primer_gc_max=None, primer_gc_min=None, primer_tm_max=None, primer_tm_min=None, primer_annealing_prop=None, annealing_temp_c=None, max_walk=None, max_homopolymers=None, min_freq=None, ignore_n=None, dimerscore=None, thermo_check=false))]
+    #[pyo3(signature = (findexes=None, rindexes=None, primer_len_min=None, primer_len_max=None, primer_gc_max=None, primer_gc_min=None, primer_tm_max=None, primer_tm_min=None, primer_annealing_prop=None, primer_annealing_diff=None, annealing_temp_c=None, max_walk=None, max_homopolymers=None, min_freq=None, ignore_n=None, dimerscore=None, thermo_check=false))]
     pub fn digest(
         &self,
         findexes: Option<Vec<usize>>,
@@ -78,6 +78,7 @@ impl Digester {
         primer_tm_max: Option<f64>,
         primer_tm_min: Option<f64>,
         primer_annealing_prop: Option<f64>,
+        primer_annealing_diff: Option<f64>,
         annealing_temp_c: Option<f64>,
         max_walk: Option<usize>,
         max_homopolymers: Option<usize>,
@@ -100,6 +101,7 @@ impl Digester {
             primer_tm_max,
             primer_tm_min,
             primer_annealing_prop,
+            primer_annealing_diff,
             annealing_temp_c,
             Some(thermo_type),
             max_walk,
@@ -223,7 +225,7 @@ impl Digester {
 }
 
 #[pyfunction]
-#[pyo3(signature = (msa_path, ncores, remap, findexes=None, rindexes=None, primer_len_min=None, primer_len_max=None, primer_gc_max=None, primer_gc_min=None, primer_tm_max=None, primer_tm_min=None, primer_annealing_prop=None, annealing_temp_c=None, max_walk=None, max_homopolymers=None, min_freq=None, ignore_n=None, dimerscore=None, thermo_check=None))]
+#[pyo3(signature = (msa_path,ncores, remap, findexes=None, rindexes=None, primer_len_min=None, primer_len_max=None, primer_gc_max=None, primer_gc_min=None, primer_tm_max=None, primer_tm_min=None, primer_annealing_prop=None, primer_annealing_diff=None,annealing_temp_c=None, max_walk=None, max_homopolymers=None, min_freq=None, ignore_n=None, dimerscore=None, thermo_check=None))]
 fn digest_seq(
     msa_path: &str,
     ncores: usize,
@@ -240,6 +242,7 @@ fn digest_seq(
     primer_tm_min: Option<f64>,
     // annealing
     primer_annealing_prop: Option<f64>,
+    primer_annealing_diff: Option<f64>,
     annealing_temp_c: Option<f64>,
 
     max_walk: Option<usize>,
@@ -269,6 +272,7 @@ fn digest_seq(
         primer_tm_max,
         primer_tm_min,
         primer_annealing_prop,
+        primer_annealing_diff,
         annealing_temp_c,
         Some(thermo_type),
         max_walk,

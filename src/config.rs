@@ -14,6 +14,7 @@ pub struct DigestConfig {
     // Annealing target
     pub primer_annealing_prop: Option<f64>,
     pub annealing_temp_c: f64,
+    pub annealing_diff: f64,
 
     // Thermo mode
     pub thermo_type: ThermoType,
@@ -39,6 +40,7 @@ impl DigestConfig {
         // annealing
         primer_annealing_prop: Option<f64>,
         annealing_temp_c: Option<f64>,
+        annealing_diff: Option<f64>,
         // thermo_type
         thermo_type: Option<ThermoType>,
 
@@ -60,6 +62,7 @@ impl DigestConfig {
             // Annealing
             primer_annealing_prop: primer_annealing_prop,
             annealing_temp_c: annealing_temp_c.unwrap_or(65.0),
+            annealing_diff: annealing_diff.unwrap_or(10.0),
             // Thermo
             thermo_type: thermo_type.unwrap_or(ThermoType::TM),
 
@@ -74,7 +77,7 @@ impl DigestConfig {
     pub fn create_default() -> DigestConfig {
         DigestConfig::new(
             None, None, None, None, None, None, None, None, None, None, None, None, None, None,
-            None,
+            None, None,
         )
     }
 }
