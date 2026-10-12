@@ -605,6 +605,86 @@ pub fn generate_primerpairs<'a>(
 mod tests {
     use super::*;
 
+    fn tags(t: &[&str]) -> Vec<String> {
+        t.iter().map(|s| s.to_string()).collect()
+    }
+
+    fn report(statuses: Vec<Vec<String>>, kmer: Vec<String>, errors: Vec<(Vec<String>, f64)>) -> KmerReport {
+        let n = statuses.len();
+        KmerReport {
+            seqs: (0..n).map(|i| format!("ACGT{i}").into_bytes()).collect(),
+            counts: vec![1.0; n],
+            statuses,
+            kmer_statuses: kmer,
+            errors,
+            dimers: vec![],
+        }
+    }
+
+    #[test]
+    fn test_passed_rules() {
+        let cases: Vec<(&str, KmerReport, bool)> = vec![
+            ("all clean", report(vec![tags(&[]), tags(&[])], vec![], vec![]), true),
+            ("one failing sequence", report(vec![tags(&[]), tags(&["Hairpin"])], vec![], vec![]), false),
+            ("kmer status", report(vec![tags(&[])], tags(&["PrimerDimer"]), vec![]), false),
+            ("error", report(vec![tags(&[])], vec![], vec![(tags(&["WalkedOutLeft"]), 1.0)]), false),
+            // A normal digest drops low-frequency entries before checking them
+            ("low-freq failing sequence", report(vec![tags(&[]), tags(&["HighGC", "LowFreq"])], vec![], vec![]), true),
+            ("low-freq error", report(vec![tags(&[])], vec![], vec![(tags(&["ContainsN", "LowFreq"]), 1.0)]), true),
+            ("only low-freq sequences", report(vec![tags(&["LowFreq"])], vec![], vec![]), false),
+            ("no sequences", report(vec![], vec![], vec![]), false),
+        ];
+        for (name, r, expected) in cases {
+            assert_eq!(FKmer::from_report(clone_report(&r), 10).passed(), expected, "FKmer {name}");
+            assert_eq!(RKmer::from_report(r, 10).passed(), expected, "RKmer {name}");
+        }
+    }
+
+    fn clone_report(r: &KmerReport) -> KmerReport {
+        KmerReport {
+            seqs: r.seqs.clone(),
+            counts: r.counts.clone(),
+            statuses: r.statuses.clone(),
+            kmer_statuses: r.kmer_statuses.clone(),
+            errors: r.errors.clone(),
+            dimers: r.dimers.clone(),
+        }
+    }
+
+    #[test]
+    fn test_normal_kmers_have_no_statuses() {
+        let f = FKmer::new(vec![b"ACGT".to_vec()], 4, None);
+        let r = RKmer::new(vec![b"ACGT".to_vec()], 0, Some(vec![1.0]));
+        assert!(f.passed() && r.passed());
+        assert_eq!(f.statuses(), None);
+        assert_eq!(r.statuses(), None);
+        assert!(f.kmer_statuses().is_empty() && f.errors().is_empty() && f.dimers().is_empty());
+        assert!(r.kmer_statuses().is_empty() && r.errors().is_empty() && r.dimers().is_empty());
+    }
+
+    #[test]
+    fn test_rkmer_from_report_aligned() {
+        let r = RKmer::from_report(
+            KmerReport {
+                seqs: vec![b"TTTT".to_vec(), b"AAAA".to_vec()],
+                counts: vec![1.0, 2.0],
+                statuses: vec![tags(&["LowTm"]), tags(&[])],
+                kmer_statuses: tags(&["PrimerDimer"]),
+                errors: vec![(tags(&["MaxWalk"]), 3.0)],
+                dimers: vec![(0, 1), (0, 0)],
+            },
+            7,
+        );
+        assert_eq!(r.start(), 7);
+        assert_eq!(r.seqs(), vec!["AAAA", "TTTT"]);
+        assert_eq!(r.counts(), &Some(vec![2.0, 1.0]));
+        assert_eq!(r.statuses(), Some(vec![tags(&[]), tags(&["LowTm"])]));
+        assert_eq!(r.kmer_statuses(), tags(&["PrimerDimer"]));
+        assert_eq!(r.errors(), vec![(tags(&["MaxWalk"]), 3.0)]);
+        assert_eq!(r.dimers(), vec![(0, 1), (1, 1)]);
+        assert!(!r.passed());
+    }
+
     #[test]
     fn test_from_report_keeps_dimer_indices_aligned() {
         // Unsorted input: indices must follow their sequences through the sort.

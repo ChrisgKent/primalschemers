@@ -1093,6 +1093,12 @@ mod tests {
             thermo_check(seq, &hairpin_only_config(100.0)),
             ThermoResult::Pass
         );
+        // Boundaries: fails only when the Tm (67.9655 °C) is strictly above
+        // the limit, as primalscheme3's `tm > primer_hairpin_th_max`.
+        let tm = primer3_thal_rs::calc_hairpin(seq, &thal_args(), false).unwrap().tm;
+        assert_eq!(thermo_check(seq, &hairpin_only_config(tm - 0.01)), ThermoResult::Hairpin);
+        assert_eq!(thermo_check(seq, &hairpin_only_config(tm)), ThermoResult::Pass);
+        assert_eq!(thermo_check(seq, &hairpin_only_config(tm + 0.01)), ThermoResult::Pass);
         // No hairpin at all (Tm 0) passes any positive limit.
         assert_eq!(
             thermo_check(b"GTAAAACGACGGCCAGTGAAT", &hairpin_only_config(1.0)),
@@ -1140,12 +1146,39 @@ mod tests {
 
     #[test]
     fn test_return_all_matches_normal_digest() {
+        // Default config, with some low-frequency sequences
+        check_return_all_parity(|c| c.min_freq = 0.2);
+    }
+
+    #[test]
+    fn test_return_all_parity_ignore_n() {
+        check_return_all_parity(|c| c.ignore_n = true);
+    }
+
+    #[test]
+    fn test_return_all_parity_annealing() {
+        check_return_all_parity(|c| {
+            c.thermo_type = ThermoType::ANNEALING;
+            c.primer_annealing_prop = Some(30.0);
+            c.annealing_diff = 20.0;
+        });
+    }
+
+    #[test]
+    fn test_return_all_parity_thermo_off() {
+        check_return_all_parity(|c| c.thermo_check = false);
+    }
+
+    /// With `return_all`, every index agrees with a normal digest: `passed()`
+    /// exactly when the normal digest keeps the kmer, with the same
+    /// sequences and counts once low-frequency sequences are dropped.
+    fn check_return_all_parity(tweak: fn(&mut DigestConfig)) {
         let seqs = variant_alignment();
         let seq_refs: Vec<&[u8]> = seqs.iter().map(|s| s.as_slice()).collect();
         let mut normal = DigestConfig::create_default();
-        normal.min_freq = 0.2; // so some sequences are low frequency
+        tweak(&mut normal);
         let mut all = DigestConfig::create_default();
-        all.min_freq = 0.2;
+        tweak(&mut all);
         all.return_all = true;
 
         let (mut kept, mut returned, mut flagged, mut low) = (0, 0, 0, 0);
@@ -1203,12 +1236,246 @@ mod tests {
                 }
             }
         }
-        eprintln!("return_all parity: {kept} kept normally, {returned} returned, {flagged} with a multi-failure sequence, {low} low-frequency sequences");
-        assert!(kept > 0 && returned > kept, "kept {kept}, returned {returned}");
-        assert!(flagged > 0, "no sequence failed more than one check");
-        assert!(low > 0, "no low-frequency sequences");
-        eprintln!("return_all parity: {dimer_kmers} kmers with dimer pairs");
-        assert!(dimer_kmers > 0, "no dimer kmers");
+        eprintln!("return_all parity: {kept} kept normally, {returned} returned, {flagged} with a multi-failure sequence, {low} low-frequency sequences, {dimer_kmers} with dimer pairs");
+        assert!(kept > 0 && returned >= kept, "kept {kept}, returned {returned}");
+        if all.thermo_check {
+            assert!(returned > kept, "nothing was rejected");
+            assert!(flagged > 0, "no sequence failed more than one check");
+            assert!(dimer_kmers > 0, "no dimer kmers");
+        }
+        if all.min_freq > 0.0 {
+            assert!(low > 0, "no low-frequency sequences");
+        }
+    }
+
+    /// A config that passes any sequence: every check is wide open.
+    fn permissive_config() -> DigestConfig {
+        let mut dconf = hairpin_only_config(1000.0);
+        dconf.max_homopolymers = 1000;
+        dconf
+    }
+
+    #[test]
+    fn test_thermo_failures_each_check_in_isolation() {
+        let plain = b"ACGTACGATCGATGCATGCA"; // 50% GC, no long homopolymer
+        let homopolymer = b"ACGTAAAAAAGATGCATGCA";
+        let hairpin = b"CCCCCATCCGATCAGGGGG"; // hairpin Tm 68 °C
+        type Tweak = fn(&mut DigestConfig);
+        let cases: [(&str, &[u8], Tweak, ThermoResult); 9] = [
+            ("low gc", plain, |c| c.primer_gc_min = 0.9, ThermoResult::LowGC),
+            ("high gc", plain, |c| c.primer_gc_max = 0.1, ThermoResult::HighGC),
+            ("homopolymer", homopolymer, |c| c.max_homopolymers = 3, ThermoResult::Homopolymer),
+            ("high tm", plain, |c| c.primer_tm_max = 0.0, ThermoResult::HighTm),
+            ("low tm", plain, |c| c.primer_tm_min = 1000.0, ThermoResult::LowTm),
+            ("high annealing", plain, |c| {
+                c.thermo_type = ThermoType::ANNEALING;
+                c.primer_annealing_prop = Some(-1000.0);
+                c.annealing_diff = 0.0;
+            }, ThermoResult::HighAnnealing),
+            ("low annealing", plain, |c| {
+                c.thermo_type = ThermoType::ANNEALING;
+                c.primer_annealing_prop = Some(1000.0);
+                c.annealing_diff = 0.0;
+            }, ThermoResult::LowAnnealing),
+            ("hairpin", hairpin, |c| c.primer_hairpin_th_max = 55.0, ThermoResult::Hairpin),
+            // Hairpin calculation refuses > 60 nt; primer_len_max normally prevents it
+            ("too long", &[b'A'; 61], |_| {}, ThermoResult::Fail),
+        ];
+        for (name, seq, tweak, expected) in cases {
+            let mut dconf = permissive_config();
+            tweak(&mut dconf);
+            assert_eq!(thermo_failures(seq, &dconf, true), vec![expected.clone()], "{name}");
+            assert_eq!(thermo_failures(seq, &dconf, false), vec![expected.clone()], "{name}");
+            assert_eq!(thermo_check(seq, &dconf), expected, "{name}");
+        }
+        // Nothing fails under the permissive config
+        for seq in [&plain[..], &homopolymer[..], &hairpin[..]] {
+            assert!(thermo_failures(seq, &permissive_config(), true).is_empty());
+            assert_eq!(thermo_check(seq, &permissive_config()), ThermoResult::Pass);
+        }
+        // Annealing checks pass within the window
+        let mut dconf = permissive_config();
+        dconf.thermo_type = ThermoType::ANNEALING;
+        dconf.primer_annealing_prop = Some(50.0);
+        dconf.annealing_diff = 1000.0;
+        assert!(thermo_failures(plain, &dconf, true).is_empty());
+    }
+
+    #[test]
+    fn test_thermo_failures_all_in_check_order() {
+        // Fails GC, homopolymer, Tm and hairpin at once
+        let seq = b"CCCCCATCCGATCAGGGGG";
+        let mut dconf = permissive_config();
+        dconf.primer_gc_max = 0.1;
+        dconf.max_homopolymers = 3;
+        dconf.primer_tm_min = 1000.0;
+        dconf.primer_hairpin_th_max = 55.0;
+        let all = vec![
+            ThermoResult::HighGC,
+            ThermoResult::Homopolymer,
+            ThermoResult::LowTm,
+            ThermoResult::Hairpin,
+        ];
+        assert_eq!(thermo_failures(seq, &dconf, true), all);
+        assert_eq!(thermo_failures(seq, &dconf, false), vec![ThermoResult::HighGC]);
+        assert_eq!(thermo_check(seq, &dconf), ThermoResult::HighGC);
+    }
+
+    #[test]
+    fn test_digestion_kmer_thermo_check_modes() {
+        let seq = b"CCCCCATCCGATCAGGGGG".to_vec();
+        let mut dconf = permissive_config();
+        dconf.primer_gc_max = 0.1;
+        dconf.primer_hairpin_th_max = 55.0;
+
+        // Normal: first failure only, no failure list
+        let mut dk = DigestionKmers::new(Some(seq.clone()), None, 1.0);
+        dk._thermo_check(&dconf);
+        assert_eq!(dk.status, Some(IndexResult::ThermoResult(ThermoResult::HighGC)));
+        assert!(dk.failures.is_empty());
+
+        // return_all: status is the first failure, failures has them all
+        dconf.return_all = true;
+        let mut dk = DigestionKmers::new(Some(seq.clone()), None, 1.0);
+        dk._thermo_check(&dconf);
+        assert_eq!(dk.status, Some(IndexResult::ThermoResult(ThermoResult::HighGC)));
+        assert_eq!(dk.failures, vec![ThermoResult::HighGC, ThermoResult::Hairpin]);
+
+        // A passing sequence
+        let mut dk = DigestionKmers::new(Some(seq.clone()), None, 1.0);
+        dk._thermo_check(&permissive_config());
+        assert_eq!(dk.status, Some(IndexResult::Pass()));
+
+        // Thermo checks off
+        let mut off = permissive_config();
+        off.thermo_check = false;
+        off.return_all = true;
+        let mut dk = DigestionKmers::new(Some(seq.clone()), None, 1.0);
+        dk._thermo_check(&off);
+        assert_eq!(dk.status, Some(IndexResult::NotChecked()));
+        assert!(dk.failures.is_empty());
+
+        // No sequence
+        let mut dk = DigestionKmers::new(None, None, 1.0);
+        dk._thermo_check(&dconf);
+        assert_eq!(dk.status, Some(IndexResult::DigestError(DigestError::NoValidPrimer)));
+    }
+
+    #[test]
+    fn test_process_seqs_min_freq() {
+        let counts = || {
+            HashMap::from([
+                (Ok(b"ACGTACGATCGATGCATGCA".to_vec()), 9.0),
+                (Ok(b"ACGTACGATCGATGCATGCT".to_vec()), 1.0),
+                (Err(DigestError::ContainsN), 0.5),
+            ])
+        };
+        let mut dconf = permissive_config();
+        dconf.min_freq = 0.2;
+        // Normal: below min_freq is dropped
+        let kept = process_seqs(counts(), &dconf);
+        assert_eq!(kept.len(), 1);
+        assert_eq!(kept[0].count, 9.0);
+        // return_all: kept and marked
+        dconf.return_all = true;
+        let all = process_seqs(counts(), &dconf);
+        assert_eq!(all.len(), 3);
+        for dk in &all {
+            assert_eq!(dk.low_freq, dk.count < 2.1, "count {}", dk.count);
+        }
+    }
+
+    fn dk(seq: Option<&[u8]>, status: Option<IndexResult>, count: f64, failures: Vec<ThermoResult>, low_freq: bool) -> DigestionKmers {
+        let mut d = DigestionKmers::new(seq.map(|s| s.to_vec()), status, count);
+        d.failures = failures;
+        d.low_freq = low_freq;
+        d
+    }
+
+    #[test]
+    fn test_report_all_branches() {
+        let mut dconf = permissive_config();
+        dconf.return_all = true;
+        let err = |e| Some(IndexResult::DigestError(e));
+        let dks = vec![
+            dk(Some(b"ACGTACGATCGATGCATGCA"), Some(IndexResult::Pass()), 5.0, vec![], false),
+            dk(Some(b"CCCCCATCCGATCAGGGGG"), Some(IndexResult::ThermoResult(ThermoResult::HighGC)), 3.0,
+               vec![ThermoResult::HighGC, ThermoResult::Hairpin], false),
+            dk(Some(b"ACGTACGATCGATGCATGCT"), Some(IndexResult::Pass()), 1.0, vec![], true),
+            dk(None, err(DigestError::EndOfSequence), 1.0, vec![], false), // skipped, as normal
+            dk(None, err(DigestError::WalkedOutLeft), 2.0, vec![], false),
+            dk(None, err(DigestError::ContainsN), 1.0, vec![], true),
+            dk(None, None, 1.0, vec![], false), // no status: NoValidPrimer
+        ];
+        let report = report_all(dks, &dconf).unwrap();
+        assert_eq!(report.counts, vec![5.0, 3.0, 1.0]);
+        assert_eq!(
+            report.statuses,
+            vec![vec![], vec!["HighGC".to_string(), "Hairpin".to_string()], vec!["LowFreq".to_string()]]
+        );
+        assert_eq!(
+            report.errors,
+            vec![
+                (vec!["WalkedOutLeft".to_string()], 2.0),
+                (vec!["ContainsN".to_string(), "LowFreq".to_string()], 1.0),
+                (vec!["NoValidPrimer".to_string()], 1.0),
+            ]
+        );
+
+        // ContainsN is skipped when N is ignored
+        dconf.ignore_n = true;
+        let report = report_all(
+            vec![
+                dk(Some(b"ACGTACGATCGATGCATGCA"), Some(IndexResult::Pass()), 1.0, vec![], false),
+                dk(None, err(DigestError::ContainsN), 1.0, vec![], false),
+            ],
+            &dconf,
+        )
+        .unwrap();
+        assert!(report.errors.is_empty());
+
+        // No sequence at all: the first error, as a normal digest reports
+        let none = report_all(
+            vec![
+                dk(None, err(DigestError::EndOfSequence), 1.0, vec![], false),
+                dk(None, err(DigestError::MaxWalk), 1.0, vec![], false),
+                dk(None, err(DigestError::WalkedOutLeft), 1.0, vec![], false),
+            ],
+            &dconf,
+        );
+        assert_eq!(none.err(), Some(IndexResult::DigestError(DigestError::MaxWalk)));
+        assert_eq!(
+            report_all(vec![], &dconf).err(),
+            Some(IndexResult::DigestError(DigestError::NoValidPrimer))
+        );
+    }
+
+    #[test]
+    fn test_report_all_dimer_check() {
+        let selfcomp = b"AAAAAAAAAAGCGCGCGCGC"; // 3' self-complementary
+        let plain = b"GTAAAACGACGGCCAGTGAAT"; // M13: dimerises with neither
+        let mut dconf = permissive_config();
+        dconf.return_all = true;
+        let run = |dconf: &DigestConfig, low: bool| {
+            report_all(
+                vec![
+                    dk(Some(plain), Some(IndexResult::Pass()), 1.0, vec![], false),
+                    dk(Some(selfcomp), Some(IndexResult::Pass()), 1.0, vec![], low),
+                ],
+                dconf,
+            )
+            .unwrap()
+        };
+        let report = run(&dconf, false);
+        assert_eq!(report.kmer_statuses, vec!["PrimerDimer".to_string()]);
+        assert_eq!(report.dimers, vec![(1, 1)]);
+        // A low-frequency sequence is left out of the dimer check
+        let report = run(&dconf, true);
+        assert!(report.kmer_statuses.is_empty() && report.dimers.is_empty());
+        // No dimer check when thermo checks are off
+        dconf.thermo_check = false;
+        let report = run(&dconf, false);
+        assert!(report.kmer_statuses.is_empty() && report.dimers.is_empty());
     }
 
     #[test]
