@@ -19,7 +19,31 @@ permissions:
   contents: read
 
 jobs:
+  # Runs first: the wheel builds below wait for it, so a failing test stops
+  # the expensive cross-compilation (and any release) early.
+  test:
+    name: Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Rust tests
+        # pyo3 links libpython, so the test binaries need it on the loader path
+        env:
+          LD_LIBRARY_PATH: ${{ env.pythonLocation }}/lib
+        run: cargo test --release
+      - name: Python tests
+        run: |
+          python -m pip install pytest "primer3-py==2.3.0"
+          python -m pip install .
+          python -m pytest tests -q
+
   linux:
+    needs: [test]
     runs-on: ${{ matrix.platform.runner }}
     strategy:
       matrix:
@@ -55,6 +79,7 @@ jobs:
           path: dist
 
   musllinux:
+    needs: [test]
     runs-on: ${{ matrix.platform.runner }}
     strategy:
       matrix:
@@ -86,6 +111,7 @@ jobs:
           path: dist
 
   windows:
+    needs: [test]
     runs-on: ${{ matrix.platform.runner }}
     strategy:
       matrix:
@@ -113,6 +139,7 @@ jobs:
           path: dist
 
   macos:
+    needs: [test]
     runs-on: ${{ matrix.platform.runner }}
     strategy:
       matrix:
@@ -137,6 +164,7 @@ jobs:
           path: dist
 
   sdist:
+    needs: [test]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
