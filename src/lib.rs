@@ -14,6 +14,7 @@ pub mod mapping;
 pub mod primaldimer;
 pub mod seqfuncs;
 pub mod seqio;
+pub mod thal;
 pub mod tm;
 
 #[pyclass]
@@ -498,6 +499,7 @@ fn primalschemers(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<kmer::FKmer>()?;
     m.add_class::<kmer::RKmer>()?;
     m.add_class::<Digester>()?;
+    m.add_class::<thal::PyThermoResult>()?;
 
     // Functions
     m.add_function(wrap_pyfunction!(digest_seq, m)?)?;
@@ -508,6 +510,9 @@ fn primalschemers(m: &Bound<'_, PyModule>) -> PyResult<()> {
 
     // Thermo
     m.add_function(wrap_pyfunction!(calc_annealing, m)?)?;
+    m.add_function(wrap_pyfunction!(thal::calc_hairpin, m)?)?;
+    m.add_function(wrap_pyfunction!(thal::calc_homodimer, m)?)?;
+    m.add_function(wrap_pyfunction!(thal::calc_heterodimer, m)?)?;
 
     Ok(())
 }

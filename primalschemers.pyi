@@ -1,4 +1,4 @@
-from typing import List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 class FKmer:
     def __init__(
@@ -111,3 +111,55 @@ def generate_primerpairs_py(
     amplicon_size_min: int,
     amplicon_size_max: int,
 ) -> List[Tuple[FKmer, RKmer]]: ...
+
+# Thermodynamics via primer3-thal-rs: drop-in for primer3-py 2.3.0's
+# calc_hairpin / calc_homodimer / calc_heterodimer.
+
+class ThermoResult:
+    @property
+    def structure_found(self) -> bool: ...
+    @property
+    def tm(self) -> float: ...
+    @property
+    def dg(self) -> float: ...
+    @property
+    def dh(self) -> float: ...
+    @property
+    def ds(self) -> float: ...
+    @property
+    def ascii_structure(self) -> Optional[str]: ...
+    @property
+    def ascii_structure_lines(self) -> Optional[List[str]]: ...
+    def todict(self) -> Dict[str, Any]: ...
+
+def calc_hairpin(
+    seq: Union[str, bytes],
+    mv_conc: float = 50.0,
+    dv_conc: float = 1.5,
+    dntp_conc: float = 0.6,
+    dna_conc: float = 50.0,
+    temp_c: float = 37.0,
+    max_loop: int = 30,
+    output_structure: bool = False,
+) -> ThermoResult: ...
+def calc_homodimer(
+    seq: Union[str, bytes],
+    mv_conc: float = 50.0,
+    dv_conc: float = 1.5,
+    dntp_conc: float = 0.6,
+    dna_conc: float = 50.0,
+    temp_c: float = 37.0,
+    max_loop: int = 30,
+    output_structure: bool = False,
+) -> ThermoResult: ...
+def calc_heterodimer(
+    seq1: Union[str, bytes],
+    seq2: Union[str, bytes],
+    mv_conc: float = 50.0,
+    dv_conc: float = 1.5,
+    dntp_conc: float = 0.6,
+    dna_conc: float = 50.0,
+    temp_c: float = 37.0,
+    max_loop: int = 30,
+    output_structure: bool = False,
+) -> ThermoResult: ...
