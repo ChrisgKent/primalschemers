@@ -373,6 +373,8 @@ dependencies = [
 [[package]]
 name = "primer3-thal-rs"
 version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b2a977ab9ade5a5a1176fe26c180b3b50d4e6bdbaca0a03b7cbea4c5b6402b2a"
 dependencies = [
  "rayon",
 ]
