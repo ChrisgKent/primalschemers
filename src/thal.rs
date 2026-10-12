@@ -11,7 +11,7 @@ use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyString};
 
 /// Result of a thal calculation, mirroring primer3-py's `ThermoResult`.
-#[pyclass(name = "ThermoResult", frozen, get_all)]
+#[pyclass(name = "ThermoResult", frozen, get_all, skip_from_py_object)]
 #[derive(Clone, Debug)]
 pub struct PyThermoResult {
     /// Whether any structure was found.
