@@ -226,6 +226,40 @@ def test_hairpin_threshold_matches_python_check(msa_path):
     assert by_key(f + r) == by_key(f55 + r55)
 
 
+def annealing(seq, temp_c):
+    # The digest's fixed conditions (digest.rs)
+    return ps.calc_annealing(seq, 15.0, 100.0, 2.0, 0.8, 0.0, 0.0, 0.8, temp_c)
+
+
+@pytest.mark.parametrize("entry", ["digest", "digest_seq"])
+@pytest.mark.parametrize("temp_c,prop,diff", [(60.0, 50.0, 5.0), (65.0, 30.0, 10.0)])
+def test_annealing_mode_filters_on_annealing(msa_path, entry, temp_c, prop, diff):
+    def run(**kw):
+        kw = dict(thermo_check=True, primer_annealing_prop=prop, **kw)
+        if entry == "digest":
+            f, r, _ = ps.Digester(msa_path, 1, False).digest(**kw)
+        else:
+            f, r, _ = ps.digest_seq(msa_path, 1, False, **kw)
+        return f + r
+
+    kmers = run(primer_annealing_diff=diff, annealing_temp_c=temp_c)
+    assert kmers
+    for k in kmers:
+        for s in k.seqs():
+            a = annealing(s.decode() if isinstance(s, bytes) else s, temp_c)
+            assert prop - diff <= a <= prop + diff, (s, a)
+    # The filter does work: an open window lets some outside it through
+    wide = run(primer_annealing_diff=100.0, annealing_temp_c=temp_c)
+    assert any(
+        not prop - diff <= annealing(s.decode() if isinstance(s, bytes) else s, temp_c) <= prop + diff
+        for k in wide
+        for s in k.seqs()
+    )
+    # and the temperature matters
+    other = run(primer_annealing_diff=diff, annealing_temp_c=temp_c - 10.0)
+    assert {kmer_key(k) for k in other} != {kmer_key(k) for k in kmers}
+
+
 def test_hairpin_not_applied_without_thermo_check(msa_path):
     d = ps.Digester(msa_path, 1, False)
     f, r, _ = d.digest(thermo_check=False, primer_hairpin_th_max=0.0)
