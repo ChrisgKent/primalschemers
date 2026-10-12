@@ -20,6 +20,8 @@ pub struct KmerReport {
     pub kmer_statuses: Vec<String>,
     /// Positions with no sequence: their errors and count.
     pub errors: Vec<(Vec<String>, f64)>,
+    /// Interacting sequence pairs `(i, j)`, `i <= j`, indexing `seqs`.
+    pub dimers: Vec<(usize, usize)>,
 }
 
 /// Per-sequence status fields of a kmer built by a `return_all` digest.
@@ -28,6 +30,8 @@ struct Statuses {
     per_seq: Vec<Vec<String>>,
     kmer: Vec<String>,
     errors: Vec<(Vec<String>, f64)>,
+    /// Interacting pairs, indexing the kmer's sorted `seqs`.
+    dimers: Vec<(usize, usize)>,
 }
 
 impl Statuses {
@@ -42,29 +46,43 @@ impl Statuses {
     }
 }
 
-/// Sort a report's sequences, keeping counts and statuses aligned.
-/// Sequences from a digest are unique, so no merging is needed.
+/// Sort a report's sequences, keeping counts, statuses and dimer indices
+/// aligned. Sequences from a digest are unique, so no merging is needed.
 fn sorted_report(report: KmerReport) -> (Vec<Vec<u8>>, Vec<f64>, Statuses) {
-    let mut rows: Vec<(Vec<u8>, f64, Vec<String>)> = report
+    let mut rows: Vec<(Vec<u8>, f64, Vec<String>, usize)> = report
         .seqs
         .into_iter()
         .zip(report.counts)
         .zip(report.statuses)
-        .map(|((seq, count), status)| (seq, count, status))
+        .enumerate()
+        .map(|(orig, ((seq, count), status))| (seq, count, status, orig))
         .collect();
     rows.sort_by(|a, b| a.0.cmp(&b.0));
     let mut seqs = Vec::with_capacity(rows.len());
     let mut counts = Vec::with_capacity(rows.len());
     let mut per_seq = Vec::with_capacity(rows.len());
-    for (seq, count, status) in rows {
+    // new_index[original index] = position after sorting
+    let mut new_index = vec![0; rows.len()];
+    for (pos, (seq, count, status, orig)) in rows.into_iter().enumerate() {
         seqs.push(seq);
         counts.push(count);
         per_seq.push(status);
+        new_index[orig] = pos;
     }
+    let mut dimers: Vec<(usize, usize)> = report
+        .dimers
+        .into_iter()
+        .map(|(a, b)| {
+            let (a, b) = (new_index[a], new_index[b]);
+            (a.min(b), a.max(b))
+        })
+        .collect();
+    dimers.sort();
     let statuses = Statuses {
         per_seq,
         kmer: report.kmer_statuses,
         errors: report.errors,
+        dimers,
     };
     (seqs, counts, statuses)
 }
@@ -251,6 +269,13 @@ impl FKmer {
         self.statuses.as_ref().map(|s| s.errors.clone()).unwrap_or_default()
     }
 
+    /// Sequence pairs that form a primer dimer, as indices into `seqs()`
+    /// with `i <= j` (`(i, i)` is a self-dimer). Empty unless digested with
+    /// `return_all`; non-empty exactly when `kmer_statuses()` has `PrimerDimer`.
+    pub fn dimers(&self) -> Vec<(usize, usize)> {
+        self.statuses.as_ref().map(|s| s.dimers.clone()).unwrap_or_default()
+    }
+
     /// Whether a normal digest would keep this kmer. Always true for kmers
     /// not digested with `return_all`.
     pub fn passed(&self) -> bool {
@@ -433,6 +458,13 @@ impl RKmer {
         self.statuses.as_ref().map(|s| s.errors.clone()).unwrap_or_default()
     }
 
+    /// Sequence pairs that form a primer dimer, as indices into `seqs()`
+    /// with `i <= j` (`(i, i)` is a self-dimer). Empty unless digested with
+    /// `return_all`; non-empty exactly when `kmer_statuses()` has `PrimerDimer`.
+    pub fn dimers(&self) -> Vec<(usize, usize)> {
+        self.statuses.as_ref().map(|s| s.dimers.clone()).unwrap_or_default()
+    }
+
     /// Whether a normal digest would keep this kmer. Always true for kmers
     /// not digested with `return_all`.
     pub fn passed(&self) -> bool {
@@ -572,6 +604,24 @@ pub fn generate_primerpairs<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_from_report_keeps_dimer_indices_aligned() {
+        // Unsorted input: indices must follow their sequences through the sort.
+        let report = KmerReport {
+            seqs: vec![b"TTTT".to_vec(), b"AAAA".to_vec(), b"GGGG".to_vec()],
+            counts: vec![1.0, 2.0, 3.0],
+            statuses: vec![vec![], vec!["HighGC".to_string()], vec![]],
+            kmer_statuses: vec!["PrimerDimer".to_string()],
+            errors: vec![],
+            dimers: vec![(0, 2), (1, 1)], // TTTT-GGGG, AAAA-AAAA
+        };
+        let k = FKmer::from_report(report, 10);
+        assert_eq!(k.seqs(), vec!["AAAA", "GGGG", "TTTT"]);
+        assert_eq!(k.counts(), &Some(vec![2.0, 3.0, 1.0]));
+        assert_eq!(k.statuses().unwrap()[0], vec!["HighGC".to_string()]);
+        assert_eq!(k.dimers(), vec![(0, 0), (1, 2)]);
+    }
 
     #[test]
     fn test_fkmer_start() {

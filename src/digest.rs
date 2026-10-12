@@ -272,6 +272,7 @@ fn report_all(dks: Vec<DigestionKmers>, dconf: &DigestConfig) -> Result<KmerRepo
         statuses: Vec::new(),
         kmer_statuses: Vec::new(),
         errors: Vec::new(),
+        dimers: Vec::new(),
     };
     let mut first_error = None;
     for dk in dks {
@@ -303,16 +304,18 @@ fn report_all(dks: Vec<DigestionKmers>, dconf: &DigestConfig) -> Result<KmerRepo
     if report.seqs.is_empty() {
         return Err(first_error.unwrap_or(IndexResult::DigestError(DigestError::NoValidPrimer)));
     }
-    // Dimer check over the sequences a normal digest would keep
+    // Dimer check over the sequences a normal digest would keep, recording
+    // every interacting pair (as indices into report.seqs)
     if dconf.thermo_check {
-        let kept: Vec<Vec<u8>> = report
-            .seqs
-            .iter()
-            .zip(&report.statuses)
-            .filter(|(_, tags)| !tags.iter().any(|t| t == LOW_FREQ))
-            .map(|(seq, _)| seq.clone())
+        let kept: Vec<usize> = (0..report.seqs.len())
+            .filter(|&i| !report.statuses[i].iter().any(|t| t == LOW_FREQ))
             .collect();
-        if !kept.is_empty() && primaldimer::do_pool_interact_u8(&kept, &kept, dconf.dimerscore) {
+        let kept_seqs: Vec<Vec<u8>> = kept.iter().map(|&i| report.seqs[i].clone()).collect();
+        report.dimers = primaldimer::pool_dimer_pairs(&kept_seqs, dconf.dimerscore)
+            .into_iter()
+            .map(|(a, b)| (kept[a], kept[b]))
+            .collect();
+        if !report.dimers.is_empty() {
             report.kmer_statuses.push(format!("{:?}", ThermoResult::PrimerDimer));
         }
     }
@@ -1146,19 +1149,34 @@ mod tests {
         all.return_all = true;
 
         let (mut kept, mut returned, mut flagged, mut low) = (0, 0, 0, 0);
+        let mut dimer_kmers = 0;
         for index in 0..=seqs[0].len() {
             for forward in [true, false] {
                 let (n, a) = if forward {
                     (
                         digest_f_at_index(&seq_refs, index, &normal).map(|k| (k.seqs(), k.counts().clone())),
-                        digest_f_at_index(&seq_refs, index, &all)
-                            .map(|k| (k.seqs(), k.counts().clone(), k.statuses().unwrap(), k.passed())),
+                        digest_f_at_index(&seq_refs, index, &all).map(|k| {
+                            assert_eq!(
+                                !k.dimers().is_empty(),
+                                k.kmer_statuses().contains(&"PrimerDimer".to_string()),
+                                "index {index}"
+                            );
+                            dimer_kmers += !k.dimers().is_empty() as usize;
+                            (k.seqs(), k.counts().clone(), k.statuses().unwrap(), k.passed())
+                        }),
                     )
                 } else {
                     (
                         digest_r_at_index(&seq_refs, index, &normal).map(|k| (k.seqs(), k.counts().clone())),
-                        digest_r_at_index(&seq_refs, index, &all)
-                            .map(|k| (k.seqs(), k.counts().clone(), k.statuses().unwrap(), k.passed())),
+                        digest_r_at_index(&seq_refs, index, &all).map(|k| {
+                            assert_eq!(
+                                !k.dimers().is_empty(),
+                                k.kmer_statuses().contains(&"PrimerDimer".to_string()),
+                                "index {index}"
+                            );
+                            dimer_kmers += !k.dimers().is_empty() as usize;
+                            (k.seqs(), k.counts().clone(), k.statuses().unwrap(), k.passed())
+                        }),
                     )
                 };
                 if let Ok((_, _, statuses, _)) = &a {
@@ -1189,6 +1207,8 @@ mod tests {
         assert!(kept > 0 && returned > kept, "kept {kept}, returned {returned}");
         assert!(flagged > 0, "no sequence failed more than one check");
         assert!(low > 0, "no low-frequency sequences");
+        eprintln!("return_all parity: {dimer_kmers} kmers with dimer pairs");
+        assert!(dimer_kmers > 0, "no dimer kmers");
     }
 
     #[test]
