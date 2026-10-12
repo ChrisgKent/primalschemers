@@ -5,7 +5,6 @@ use pyo3::prelude::*;
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use std::{collections::HashMap, time::Duration};
 
-use crate::tm::TmMethod;
 
 pub mod config;
 pub mod digest;
@@ -475,7 +474,12 @@ fn calc_at_offset_py(seq1: &str, seq2: &str, offset: i32) -> f64 {
     };
 }
 
+/// Percentage of `sequence` bound to its complement at `annealing_temp_c`,
+/// on the same model as the digest and `calc_tm`. DMSO and formamide don't
+/// affect binding and are accepted for compatibility. Raises ValueError for
+/// an empty sequence or a base other than A/C/G/T.
 #[pyfunction]
+#[allow(clippy::too_many_arguments)]
 fn calc_annealing(
     sequence: &str,
     dna_nm: f64,
@@ -486,19 +490,19 @@ fn calc_annealing(
     dmso_fact: f64,
     formamide_conc: f64,
     annealing_temp_c: f64,
-) -> f64 {
-    tm::oligo_annealing_utf8(
-        sequence.as_bytes(),
-        dna_nm,
-        k_mm,
-        divalent_conc,
-        dntp_conc,
+) -> PyResult<f64> {
+    let args = primer3_thal_rs::ThalArgs {
+        mv: k_mm,
+        dv: divalent_conc,
+        dntp: dntp_conc,
+        dna_conc: dna_nm,
         dmso_conc,
         dmso_fact,
         formamide_conc,
-        annealing_temp_c,
-        TmMethod::SantaLucia2004,
-    )
+        ..Default::default()
+    };
+    tm::oligo_annealing(sequence.as_bytes(), &args, annealing_temp_c)
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))
 }
 
 #[pymodule]
@@ -521,6 +525,7 @@ fn primalschemers(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(thal::calc_hairpin, m)?)?;
     m.add_function(wrap_pyfunction!(thal::calc_homodimer, m)?)?;
     m.add_function(wrap_pyfunction!(thal::calc_heterodimer, m)?)?;
+    m.add_function(wrap_pyfunction!(thal::calc_tm, m)?)?;
 
     Ok(())
 }

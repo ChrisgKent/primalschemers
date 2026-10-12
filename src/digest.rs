@@ -8,26 +8,23 @@ use crate::{primaldimer, tm};
 
 use std::collections::HashMap;
 
+use primer3_thal_rs::ThalArgs;
+
 use indicatif::{ParallelProgressIterator, ProgressBar, ProgressStyle};
 use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 
-static DNA_NM: f64 = 15.0;
-static K_MM: f64 = 100.0;
-static DIVALENT_CONC: f64 = 2.0;
-static DNTP_CONC: f64 = 0.8;
-static DMSO_CONC: f64 = 0.0;
-static DMSO_FACT: f64 = 0.0;
-static FORMAMIDE_CONC: f64 = 0.8;
-
-/// thal conditions for the hairpin check: the digest's salt and DNA
-/// concentrations, matching primalscheme3's config (37 °C, max_loop 30).
-fn thal_args() -> primer3_thal_rs::ThalArgs {
-    primer3_thal_rs::ThalArgs {
-        mv: K_MM,
-        dv: DIVALENT_CONC,
-        dntp: DNTP_CONC,
-        dna_conc: DNA_NM,
-        ..Default::default()
+/// The reaction conditions every thermodynamic check in the digest uses:
+/// primer Tm and annealing, and the hairpin check. primalscheme3's salt and
+/// DNA concentrations (100 mM monovalent, 2 mM divalent, 0.8 mM dNTP,
+/// 15 nM DNA) with 0.8 M formamide, at 37 °C with `max_loop` 30.
+pub fn conditions() -> ThalArgs {
+    ThalArgs {
+        mv: 100.0,
+        dv: 2.0,
+        dntp: 0.8,
+        dna_conc: 15.0,
+        formamide_conc: 0.8,
+        ..ThalArgs::default()
     }
 }
 
@@ -166,17 +163,11 @@ pub fn thermo_failures(kmer: &[u8], dconf: &DigestConfig, all: bool) -> Vec<Ther
     // Check Tm if using TM Method
     match dconf.thermo_type {
         ThermoType::TM => {
-            let tm = tm::oligo_tm_utf8(
-                kmer,
-                DNA_NM,
-                K_MM,
-                DIVALENT_CONC,
-                DNTP_CONC,
-                DMSO_CONC,
-                DMSO_FACT,
-                FORMAMIDE_CONC,
-                tm::TmMethod::SantaLucia2004,
-            );
+            // Non-ACGT bases never reach here (expanded or rejected earlier)
+            let Ok(tm) = tm::oligo_tm(kmer, &conditions()) else {
+                fail!(ThermoResult::Fail);
+                return failures;
+            };
             if tm >= dconf.primer_tm_max {
                 fail!(ThermoResult::HighTm);
             }
@@ -185,18 +176,10 @@ pub fn thermo_failures(kmer: &[u8], dconf: &DigestConfig, all: bool) -> Vec<Ther
             }
         }
         ThermoType::ANNEALING => {
-            let prop = tm::oligo_annealing_utf8(
-                kmer,
-                DNA_NM,
-                K_MM,
-                DIVALENT_CONC,
-                DNTP_CONC,
-                DMSO_CONC,
-                DMSO_FACT,
-                FORMAMIDE_CONC,
-                dconf.annealing_temp_c,
-                tm::TmMethod::SantaLucia2004,
-            );
+            let Ok(prop) = tm::oligo_annealing(kmer, &conditions(), dconf.annealing_temp_c) else {
+                fail!(ThermoResult::Fail);
+                return failures;
+            };
 
             if prop > dconf.primer_annealing_prop.unwrap() + dconf.annealing_diff {
                 fail!(ThermoResult::HighAnnealing);
@@ -208,7 +191,7 @@ pub fn thermo_failures(kmer: &[u8], dconf: &DigestConfig, all: bool) -> Vec<Ther
     }
 
     // Hairpin: fail if its Tm exceeds the limit (as primalscheme3's forms_hairpin)
-    match primer3_thal_rs::calc_hairpin(kmer, &thal_args(), false) {
+    match primer3_thal_rs::calc_hairpin(kmer, &conditions(), false) {
         Ok(hairpin) if hairpin.tm > dconf.primer_hairpin_th_max => fail!(ThermoResult::Hairpin),
         Ok(_) => {}
         // Only for > 60 nt, which primer_len_max prevents
@@ -337,76 +320,23 @@ pub fn opto_binding(
             Ok(seq) => {
                 let truncated_seq = &seq[1..];
 
-                match dconf.thermo_type {
+                // Distance of a sequence's Tm or annealing from the target
+                let distance = |s: &[u8]| match dconf.thermo_type {
                     ThermoType::TM => {
                         let target_tm = (dconf.primer_tm_max + dconf.primer_tm_min) / 2.0;
-
-                        let full_tm_diff = (tm::oligo_tm_utf8(
-                            &seq,
-                            DNA_NM,
-                            K_MM,
-                            DIVALENT_CONC,
-                            DNTP_CONC,
-                            DMSO_CONC,
-                            DMSO_FACT,
-                            FORMAMIDE_CONC,
-                            tm::TmMethod::SantaLucia2004,
-                        ) - target_tm)
-                            .abs();
-                        let trunc_tm_diff = (tm::oligo_tm_utf8(
-                            truncated_seq,
-                            DNA_NM,
-                            K_MM,
-                            DIVALENT_CONC,
-                            DNTP_CONC,
-                            DMSO_CONC,
-                            DMSO_FACT,
-                            FORMAMIDE_CONC,
-                            tm::TmMethod::SantaLucia2004,
-                        ) - target_tm)
-                            .abs();
-
-                        // Return the seq with the closest tm
-                        if full_tm_diff > trunc_tm_diff {
-                            Ok(truncated_seq.to_vec())
-                        } else {
-                            Ok(seq)
-                        }
+                        tm::oligo_tm(s, &conditions()).map(|tm| (tm - target_tm).abs())
                     }
                     ThermoType::ANNEALING => {
-                        let full_annealing_diff = (tm::oligo_annealing_utf8(
-                            &seq,
-                            DNA_NM,
-                            K_MM,
-                            DIVALENT_CONC,
-                            DNTP_CONC,
-                            DMSO_CONC,
-                            DMSO_FACT,
-                            FORMAMIDE_CONC,
-                            dconf.annealing_temp_c,
-                            tm::TmMethod::SantaLucia2004,
-                        ) - dconf.primer_annealing_prop.unwrap())
-                        .abs();
-                        let trunc_annealing_diff = (tm::oligo_annealing_utf8(
-                            truncated_seq,
-                            DNA_NM,
-                            K_MM,
-                            DIVALENT_CONC,
-                            DNTP_CONC,
-                            DMSO_CONC,
-                            DMSO_FACT,
-                            FORMAMIDE_CONC,
-                            dconf.annealing_temp_c,
-                            tm::TmMethod::SantaLucia2004,
-                        ) - dconf.primer_annealing_prop.unwrap())
-                        .abs();
-                        // Return the seq with the closest tm
-                        if full_annealing_diff > trunc_annealing_diff {
-                            Ok(truncated_seq.to_vec())
-                        } else {
-                            Ok(seq)
-                        }
+                        tm::oligo_annealing(s, &conditions(), dconf.annealing_temp_c)
+                            .map(|a| (a - dconf.primer_annealing_prop.unwrap()).abs())
                     }
+                };
+
+                // Keep the seq with the closest Tm/annealing (the full seq on
+                // a tie, or if either can't be scored)
+                match (distance(&seq), distance(truncated_seq)) {
+                    (Ok(full), Ok(trunc)) if full > trunc => Ok(truncated_seq.to_vec()),
+                    _ => Ok(seq),
                 }
             }
 
@@ -459,20 +389,13 @@ pub fn walk_right(
 
     match dconf.thermo_type {
         ThermoType::TM => {
-            if kmer.calc_tm(DNA_NM, K_MM, DIVALENT_CONC, DNTP_CONC, 0.0, 0.0, 0.8)
-                >= dconf.primer_tm_min
-            {
+            if kmer.tm(&conditions()) >= dconf.primer_tm_min {
                 return vec![Ok(kmer.seq)];
             }
         }
         ThermoType::ANNEALING => {
-            if kmer.calc_annealing(
-                dconf.annealing_temp_c,
-                DNA_NM,
-                K_MM,
-                DIVALENT_CONC,
-                DNTP_CONC,
-            ) >= dconf.primer_annealing_prop.unwrap()
+            if kmer.annealing(&conditions(), dconf.annealing_temp_c)
+                >= dconf.primer_annealing_prop.unwrap()
             {
                 return vec![Ok(kmer.seq)];
             }
@@ -518,7 +441,10 @@ pub fn walk_right(
     kmer_clones.push(kmer);
 
     for (base, mut kmer_c) in new_bases.iter().zip(kmer_clones) {
-        kmer_c.add_base(*base);
+        if kmer_c.add_base(*base).is_err() {
+            results.push(Err(DigestError::InvalidBase));
+            continue;
+        }
         let new_results = walk_right(seq, l_index, r_index + 1, kmer_c, dconf);
         results.extend(new_results);
     }
@@ -584,7 +510,10 @@ pub fn digest_r_to_count(
         match check_kmer(&kmer) {
             KmerCheck::ATCGOnly => {
                 // No ambiguous bases
-                let results = walk_right(seq, index, rhs, tm::Oligo::new(kmer), dconf);
+                let results = match tm::Oligo::new(kmer) {
+                    Ok(oligo) => walk_right(seq, index, rhs, oligo, dconf),
+                    Err(_) => vec![Err(DigestError::InvalidBase)],
+                };
                 let num_results = results.len() as f64;
                 for r in results {
                     let count = kmer_count.entry(r).or_insert(0.0);
@@ -604,7 +533,10 @@ pub fn digest_r_to_count(
                     Some(expanded_kmer) => {
                         let num_kmers = expanded_kmer.len();
                         for ek in expanded_kmer.into_iter() {
-                            let results = walk_right(seq, index, rhs, tm::Oligo::new(ek), dconf);
+                            let results = match tm::Oligo::new(ek) {
+                    Ok(oligo) => walk_right(seq, index, rhs, oligo, dconf),
+                    Err(_) => vec![Err(DigestError::InvalidBase)],
+                };
                             let num_results = results.len() as f64;
                             for r in results {
                                 let count = kmer_count.entry(r).or_insert(0.0);
@@ -749,20 +681,13 @@ pub fn walk_left(
     // Check tm
     match dconf.thermo_type {
         ThermoType::TM => {
-            if kmer.calc_tm(DNA_NM, K_MM, DIVALENT_CONC, DNTP_CONC, 0.0, 0.0, 0.8)
-                >= dconf.primer_tm_min
-            {
+            if kmer.tm(&conditions()) >= dconf.primer_tm_min {
                 return vec![Ok(kmer.seq)];
             }
         }
         ThermoType::ANNEALING => {
-            if kmer.calc_annealing(
-                dconf.annealing_temp_c,
-                DNA_NM,
-                K_MM,
-                DIVALENT_CONC,
-                DNTP_CONC,
-            ) >= dconf.primer_annealing_prop.unwrap()
+            if kmer.annealing(&conditions(), dconf.annealing_temp_c)
+                >= dconf.primer_annealing_prop.unwrap()
             {
                 return vec![Ok(kmer.seq)];
             }
@@ -809,7 +734,10 @@ pub fn walk_left(
     kmer_clones.push(kmer);
 
     for (base, mut kmer_c) in new_bases.iter().zip(kmer_clones) {
-        kmer_c.add_base(complement_base(*base));
+        if kmer_c.add_base(complement_base(*base)).is_err() {
+            results.push(Err(DigestError::InvalidBase));
+            continue;
+        }
         let new_results = walk_left(seq, l_index - 1, r_index, kmer_c, dconf);
         results.extend(new_results);
     }
@@ -884,7 +812,10 @@ pub fn digest_f_to_count(
         match check_kmer(&kmer) {
             KmerCheck::ATCGOnly => {
                 // No ambiguous bases
-                let results = walk_left(seq, lhs, index, tm::Oligo::new(kmer), dconf);
+                let results = match tm::Oligo::new(kmer) {
+                    Ok(oligo) => walk_left(seq, lhs, index, oligo, dconf),
+                    Err(_) => vec![Err(DigestError::InvalidBase)],
+                };
                 let num_results = results.len() as f64;
                 for r in results {
                     let count = kmer_count.entry(r).or_insert(0.0);
@@ -904,7 +835,10 @@ pub fn digest_f_to_count(
                     Some(expanded_kmer) => {
                         let num_kmers = expanded_kmer.len();
                         for ek in expanded_kmer.into_iter() {
-                            let results = walk_left(seq, lhs, index, tm::Oligo::new(ek), dconf);
+                            let results = match tm::Oligo::new(ek) {
+                    Ok(oligo) => walk_left(seq, lhs, index, oligo, dconf),
+                    Err(_) => vec![Err(DigestError::InvalidBase)],
+                };
                             let num_results = results.len() as f64;
                             for r in results {
                                 let count = kmer_count.entry(r).or_insert(0.0);
@@ -1073,17 +1007,47 @@ mod tests {
     }
 
     #[test]
+    fn test_digest_conditions() {
+        // primalscheme3's mv/dv/dNTP/DNA, plus 0.8 M formamide
+        let c = conditions();
+        assert_eq!((c.mv, c.dv, c.dntp, c.dna_conc), (100.0, 2.0, 0.8, 15.0));
+        assert_eq!((c.dmso_conc, c.formamide_conc), (0.0, 0.8));
+        assert_eq!((c.max_loop, c.temp), (30, 310.15));
+    }
+
+    #[test]
     fn test_hairpin_tm_matches_primer3_py() {
-        // primer3.calc_hairpin(seq, mv_conc=100, dv_conc=2, dntp_conc=0.8, dna_conc=15)
+        // primer3.calc_hairpin(seq, mv_conc=100, dv_conc=2, dntp_conc=0.8,
+        // dna_conc=15), shifted by the digest's formamide correction
         let cases = [
             ("CCCCCATCCGATCAGGGGG", 67.96550347919458),
             ("ACGTACGTTTTTACGTACGT", 69.16336781546374),
-            ("GTAAAACGACGGCCAGTGAAT", 0.0),
         ];
-        for (seq, expected) in cases {
-            let res = primer3_thal_rs::calc_hairpin(seq, &thal_args(), false).unwrap();
+        for (seq, primer3) in cases {
+            let gc = gc_content(seq.as_bytes());
+            let expected = primer3 + primer3_thal_rs::nn::tm_correction(gc, &conditions());
+            let res = primer3_thal_rs::calc_hairpin(seq, &conditions(), false).unwrap();
             assert!((res.tm - expected).abs() < 1e-6, "{seq}: {} vs {expected}", res.tm);
         }
+        let none = primer3_thal_rs::calc_hairpin("GTAAAACGACGGCCAGTGAAT", &conditions(), false);
+        assert_eq!(none.unwrap().tm, 0.0);
+    }
+
+    #[test]
+    fn test_thermo_check_uses_shared_tm() {
+        // The Tm window is checked against exactly tm::oligo_tm at the
+        // digest's conditions (formamide included)
+        let seq = b"ACCAACGATGGTGTGTCCAT";
+        let tm = tm::oligo_tm(seq, &conditions()).unwrap();
+        let mut dconf = hairpin_only_config(100.0);
+        dconf.primer_tm_min = tm - 1e-6;
+        dconf.primer_tm_max = tm + 1e-6;
+        assert_eq!(thermo_check(seq, &dconf), ThermoResult::Pass);
+        dconf.primer_tm_min = tm + 1e-6;
+        assert_eq!(thermo_check(seq, &dconf), ThermoResult::LowTm);
+        dconf.primer_tm_min = tm - 1e-6;
+        dconf.primer_tm_max = tm;
+        assert_eq!(thermo_check(seq, &dconf), ThermoResult::HighTm);
     }
 
     #[test]
@@ -1099,7 +1063,7 @@ mod tests {
         );
         // Boundaries: fails only when the Tm (67.9655 °C) is strictly above
         // the limit, as primalscheme3's `tm > primer_hairpin_th_max`.
-        let tm = primer3_thal_rs::calc_hairpin(seq, &thal_args(), false).unwrap().tm;
+        let tm = primer3_thal_rs::calc_hairpin(seq, &conditions(), false).unwrap().tm;
         assert_eq!(thermo_check(seq, &hairpin_only_config(tm - 0.01)), ThermoResult::Hairpin);
         assert_eq!(thermo_check(seq, &hairpin_only_config(tm)), ThermoResult::Pass);
         assert_eq!(thermo_check(seq, &hairpin_only_config(tm + 0.01)), ThermoResult::Pass);
@@ -1672,11 +1636,11 @@ mod tests {
             assert_eq!(count, &(1.0 / 3.0), "Count: {}", count);
         }
         println!("{:?}", digested);
-        // Check sequences
+        // Check sequences: each walks until its Tm reaches primer_tm_min
         let expected = vec![
             "CTTCCCAGGTAACAAACCAACCAAT".as_bytes().to_vec(),
             "TTCCCAGGTAACAAACCAACCAAC".as_bytes().to_vec(),
-            "CTTCCCAGGTAACAAACCAACCAAG".as_bytes().to_vec(),
+            "TTCCCAGGTAACAAACCAACCAAG".as_bytes().to_vec(),
         ];
         for e in expected.into_iter() {
             assert!(digested.contains_key(&Ok(e)),)
@@ -1712,10 +1676,10 @@ mod tests {
         // Check Sequence
         let expected = vec![
             "CCAACCTAGTTTCGATCTCTTGTAGATCT".as_bytes().to_vec(),
-            "AACCGAGTTTCGATCTCTTGTAGATCT".as_bytes().to_vec(),
+            "ACCGAGTTTCGATCTCTTGTAGATCT".as_bytes().to_vec(),
             "ACCAACCTAATTTCGATCTCTTGTAGATCT".as_bytes().to_vec(),
             "CAACCGAATTTCGATCTCTTGTAGATCT".as_bytes().to_vec(),
-            "AACCCAGTTTCGATCTCTTGTAGATCT".as_bytes().to_vec(),
+            "ACCCAGTTTCGATCTCTTGTAGATCT".as_bytes().to_vec(),
             "CAACCCAATTTCGATCTCTTGTAGATCT".as_bytes().to_vec(),
         ];
         for e in expected.into_iter() {
@@ -1898,9 +1862,11 @@ mod tests {
     #[test]
     fn test_opto_binding_dedeup2() {
         // This example ends in seq1 being trucated but seq2 not. Therefore, seq1 ends up as a subseq of seq2.
+        // At 65 °C seq1 anneals ~38%, seq2 ~33% and the shared truncation
+        // ~22%, so a 28.5% target truncates only seq1.
         let mut dconf = DigestConfig::create_default();
         dconf.annealing_temp_c = 65.0;
-        dconf.primer_annealing_prop = Some(30.0);
+        dconf.primer_annealing_prop = Some(28.5);
         dconf.thermo_type = ThermoType::ANNEALING;
 
         let seqs = vec![

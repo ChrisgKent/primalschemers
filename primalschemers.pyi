@@ -153,6 +153,9 @@ def calc_hairpin(
     temp_c: float = 37.0,
     max_loop: int = 30,
     output_structure: bool = False,
+    dmso_conc: float = 0.0,
+    dmso_fact: float = 0.6,
+    formamide_conc: float = 0.0,
 ) -> ThermoResult: ...
 def calc_homodimer(
     seq: Union[str, bytes],
@@ -163,6 +166,9 @@ def calc_homodimer(
     temp_c: float = 37.0,
     max_loop: int = 30,
     output_structure: bool = False,
+    dmso_conc: float = 0.0,
+    dmso_fact: float = 0.6,
+    formamide_conc: float = 0.0,
 ) -> ThermoResult: ...
 def calc_heterodimer(
     seq1: Union[str, bytes],
@@ -174,4 +180,17 @@ def calc_heterodimer(
     temp_c: float = 37.0,
     max_loop: int = 30,
     output_structure: bool = False,
+    dmso_conc: float = 0.0,
+    dmso_fact: float = 0.6,
+    formamide_conc: float = 0.0,
 ) -> ThermoResult: ...
+def calc_tm(
+    seq: Union[str, bytes],
+    mv_conc: float = 50.0,
+    dv_conc: float = 1.5,
+    dntp_conc: float = 0.6,
+    dna_conc: float = 50.0,
+    dmso_conc: float = 0.0,
+    dmso_fact: float = 0.6,
+    formamide_conc: float = 0.0,
+) -> float: ...
