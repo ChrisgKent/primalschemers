@@ -1,5 +1,5 @@
 use crate::config::{DigestConfig, ThermoType};
-use crate::kmer::{FKmer, KmerReport, RKmer, LOW_FREQ};
+use crate::kmer::{FKmer, KmerReport, RKmer, IGNORED, LOW_FREQ};
 use crate::seqfuncs::{
     check_kmer, complement_base, expand_amb_base, expand_amb_sequence, gc_content, max_homopolymer,
     reverse_complement, KmerCheck,
@@ -289,9 +289,13 @@ fn report_all(dks: Vec<DigestionKmers>, dconf: &DigestConfig) -> Result<KmerRepo
                 report.counts.push(dk.count);
                 report.seqs.push(dk.seq.unwrap());
             }
-            // Ignored by a normal digest too
+            // Past the end of the alignment: not an error
             (None, Some(IndexResult::DigestError(DigestError::EndOfSequence))) => {}
-            (None, Some(IndexResult::DigestError(DigestError::ContainsN))) if dconf.ignore_n => {}
+            // Skipped by a normal digest with ignore_n: report, tagged Ignored
+            (None, Some(IndexResult::DigestError(DigestError::ContainsN))) if dconf.ignore_n => {
+                let tags = vec![format!("{:?}", DigestError::ContainsN), IGNORED.to_string()];
+                report.errors.push((tag(tags), dk.count));
+            }
             (None, status) => {
                 let status = status
                     .clone()
@@ -494,7 +498,7 @@ pub fn walk_right(
     match new_base {
         b' ' => return vec![Err(DigestError::EndOfSequence)],
         b'-' => return walk_right(seq, l_index, r_index + 1, kmer, dconf),
-        b'N' => return vec![Err(DigestError::ContainsN)],
+        b'N' | b'n' => return vec![Err(DigestError::ContainsN)],
         _ => (),
     }
 
@@ -785,7 +789,7 @@ pub fn walk_left(
     match new_base {
         b'-' => return walk_left(seq, l_index - 1, r_index, kmer, dconf),
         b' ' => return vec![Err(DigestError::EndOfSequence)],
-        b'N' => return vec![Err(DigestError::ContainsN)],
+        b'N' | b'n' => return vec![Err(DigestError::ContainsN)],
         _ => (),
     }
 
@@ -1422,17 +1426,30 @@ mod tests {
             ]
         );
 
-        // ContainsN is skipped when N is ignored
+        // With ignore_n, ContainsN is reported but tagged Ignored, and
+        // doesn't fail the kmer (a normal digest skips it)
         dconf.ignore_n = true;
         let report = report_all(
             vec![
-                dk(Some(b"ACGTACGATCGATGCATGCA"), Some(IndexResult::Pass()), 1.0, vec![], false),
+                dk(Some(b"GTAAAACGACGGCCAGTGAAT"), Some(IndexResult::Pass()), 3.0, vec![], false),
                 dk(None, err(DigestError::ContainsN), 1.0, vec![], false),
+                dk(None, err(DigestError::ContainsN), 0.5, vec![], true),
             ],
             &dconf,
         )
         .unwrap();
-        assert!(report.errors.is_empty());
+        assert_eq!(
+            report.errors,
+            vec![
+                (vec!["ContainsN".to_string(), "Ignored".to_string()], 1.0),
+                (vec!["ContainsN".to_string(), "Ignored".to_string(), "LowFreq".to_string()], 0.5),
+            ]
+        );
+        assert!(FKmer::from_report(report, 10).passed());
+
+        // Only ignored Ns: no sequence, so NoValidPrimer, as a normal digest
+        let only_n = report_all(vec![dk(None, err(DigestError::ContainsN), 1.0, vec![], false)], &dconf);
+        assert_eq!(only_n.err(), Some(IndexResult::DigestError(DigestError::NoValidPrimer)));
 
         // No sequence at all: the first error, as a normal digest reports
         let none = report_all(
@@ -1733,6 +1750,26 @@ mod tests {
         // Check sequence
         assert_eq!(digested.contains_key(&Err(DigestError::ContainsN)), true);
     }
+    #[test]
+    fn test_lowercase_n_same_as_uppercase() {
+        // Every index, both directions, both the kmer check and the walk:
+        // a raw lower-case n must behave exactly like N.
+        let upper = b"ATTAAAGGTTTATACCTTCCCAGGTAACAAACCAACCAANTTTCGATCTCTTGTAGATCTGTTCTCTAAACGAACTTTAAAATCTGTGTGGCTGTCACTCGGCTGCATGCTTAGTGCACTCACGCAGTATAATTAATAACTAATTACTGTCGTTGACAGGACACGAGTAACTCGTCTATCTTCTGCAGGCTGCTTACGGTTTCGTCCGTGTTGCAGCCGATCATCAGCACATCTAGGTTTCGTCCGGGTGTGACCGAAAGGTAAGATGGAGAGCCTTGTCCCTGGTTTCAACGAGAAAACACACGTCCAACTCAGTTTGCCTGTTTTACAGGTTCGCGACGTGCTCGTACGTGGCTTTGGAGACTCCGTGGAGGAGGTCTTATCAGAGGCACGTCAACATCTTAAAGATGGCACTTGTGGCTTAGTAGAAGTTGAAAAAGGCGTTTTGCCTCAACTTGAACAGCCCTATGTGTTCATCAAACGTTCGGATGCTCGAACTGCACCTCATGGTCATGTTATGGTTGAGCTGGTAGCAGAACTCGAAGGCATTCAGTACGGTCGTAGTGGTGAGACACTTGGTGTCCTTGTCCCTCATGTGGGCGAAATACCAGTGGCTTACCGCAAGGTTCTTCTTCGTAAGAACGGTAATAAAGGAGCTGGTGGCCATAGTTACGGCGCCGATCTAAAGTCATTTGACTTAGGCGACGAGCTTGGCACTGATCCTTATGAAGATTTTCAAGAAAACTGGAACACTAAACATAGCAGTGGTGTTACCCGTGAACTCATGCGTGAGCTTAACGGAGGGGCATACACTCGCTATGTCGATAACAACTTCTGTGGCCCTGATGGCTACCCTCTTGAGTGCATTAAAGACCTTCTAGCACGTGCTGGTAAAGCTTCATGCACTTTGTCCGAACAACTGGACTTTATTGACACTAAGAGGGGTGTATACTGCTGCCGTGAACATGAGCATGAAATTGCTTGGTACACGGAACGTTCTGAAAAGAGCTATGAATTGCAGACACCTTTTGAAATTAAATTGGCAAAGAAATTTGACACCTTCAATGGGGAATGTCCAAATTTTGTATTTCCCTTAAATTCCATAATCAAGACTATTCAACCAAGGGTTGAAAAGAAAAAGCTTGATGGCTTTATGGGTAGAATTCGATCTGTCTATCCAGTTGCGTCACCAAATGAATGCAACCAAATGTGCCTTTCAACTCTCATGAAGTGTGATCATTGTGGTGAAACTTCATGGCAGACGGGCGATTTTGTTAAAGCCACTTGCGAATTTTGTGGCACTGAGAATTTGACTAAAGAAGGTGCCACTACTTGTGGTTACTTACCCCAAAATGCTGTTGTTAAAATTTATTGTCCAGCATGTCACAATTCAGAAGTAGGACCTGAGCATAGTCTTGCCGAATACCATAATGAATCTGGCTTGAAAACCATTCTTCGTAAGGGTGGTCGCACTATTGCCTTTGGAGGCTGTGTGTTCTCTTATGTTGGTTGCCATAACAAGTGTGCCTATTGGGTTCCACGTGCTAGCGCTAACATAGGTTGTAACCATACAGGTGTTGTTGGAGAAGGTTCCGAAGGTCTTAATGACAACCTTCTTGAAATACTCCAAAAAGAGAAAGTCAACATCAATATTGTTGGTGACTTTAAACTTAATGAAGAGATCGCCATTATTTTGGCATCTTTTTCTGCTTCCACAAGTGCTTTTGTGGAAACTGTGAAAGGTTTGGATTATAAAGCATTCAAACAAATTGTTGAATCCTGCGGTAATTTTAAAGTTACAAAAGGAAAAGCTAAAAAAGGTGCCTGGAATATTGGTGAACAGAAATCAATACTGAGTCCTCTTTATGCATTTGCATCAGAGGCTGCTCGTGTTGTACGATCAATTTTCTCCCGCACTCTTGAAACTGCTCAAAATTCTGTGCGTGTTTTACAGAAGGCCGCTATAACAATACTAGATGGAATTTCACAGTATTCACTGAGACTCATTGATGCTATGATGTTCACATCTGATTTGGCTACTAACAATCTAGTTGTAATGGCCTACATTACAGGTGGTGTTGTTCAGTTGACTTCGCAGTGGCTAACTAACATCTTTGGCACTGTTTATGAAAAACTCAAACCCGTCCTTGATTGGCTTGAAGAGAAGTTTAAGGAAGGTGTAGAGTTTCTTAGAGACGGTTGGGAAATTGTTAAATTTATCTCAACCTGTGCTTGTGAAATTGTCGGTGGACAAATTGTCACCTGTGCAAAGGAAATTAAGGAGAGTGTTCAGACATTCTTTAAGCTTGTAAATAAATTTTTGGCTTTGTGTGCTGACTCTATCATTATTGGTGGAGCTAAACTTAAAGCCTTGAATTTAGGTGAAACATTTGTCACGCACTCAAAGGGATTGTACAGAAAGTGTGTTAAATCCAGAGAAGAAACTGGCCTACTCATGCCTCTAAAAGCCCCAAAAGAAATTATCTTCTTAGAGGGAGAAACACTTCCCACAGAAGTGTTAACAGAGGAAGTTGTCTTGAAAACTGGTGATTTACAACCATTAGAACAACCTACTAGTGAAGCTGTTGAAGCTCCATTGGTTGGTACACCAGTTTGTATTAACGGGCTTATGTTGCTCGAAATCAAAGACACAGAAAAGTACTGTGCCCTTGCACCTAATATGATGGTAACAAACAATACCTTCACACTCAAAGGCGG";
+        let lower: Vec<u8> = upper.iter().map(|&b| if b == b'N' { b'n' } else { b }).collect();
+        let dconf = DigestConfig::create_default();
+        let (u, l): (Vec<&[u8]>, Vec<&[u8]>) = (vec![&upper[..]], vec![&lower[..]]);
+        let mut n_hits = 0;
+        for index in 0..=upper.len() {
+            let fu = digest_f_to_count(&u, index, &dconf);
+            assert_eq!(fu, digest_f_to_count(&l, index, &dconf), "forward index {index}");
+            let ru = digest_r_to_count(&u, index, &dconf);
+            assert_eq!(ru, digest_r_to_count(&l, index, &dconf), "reverse index {index}");
+            n_hits += fu.contains_key(&Err(DigestError::ContainsN)) as usize
+                + ru.contains_key(&Err(DigestError::ContainsN)) as usize;
+        }
+        assert!(n_hits > 0, "no index reached the N");
+    }
+
     #[test]
     fn test_digest_f_to_count_invalid_base() {
         let dconf = DigestConfig::create_default();

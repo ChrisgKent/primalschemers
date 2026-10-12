@@ -54,6 +54,12 @@ pub fn check_kmer(kmer: &[u8]) -> KmerCheck {
     let mut contains_ns = false;
 
     for base in kmer.iter() {
+        // Check for N first, in either case: FASTA input is upper-cased on
+        // read, but raw sequences may not be
+        if base.eq_ignore_ascii_case(&b'N') {
+            contains_ns = true;
+            continue;
+        }
         // Check for non iupac and non gap bases
         if !is_iupac_base(base) {
             // If the base is a gap or space, continue
@@ -63,11 +69,6 @@ pub fn check_kmer(kmer: &[u8]) -> KmerCheck {
                 }
                 _ => return KmerCheck::ContainsInvalidBases,
             }
-        }
-        // Check for N
-        if base == &b'N' {
-            contains_ns = true;
-            continue;
         }
         // Check for amb
         if is_amb(base) {
@@ -298,6 +299,13 @@ mod tests {
         assert_eq!(check_kmer(b"ATCG "), KmerCheck::ATCGOnly);
         assert_eq!(check_kmer(b"ATCG-"), KmerCheck::ATCGOnly);
         assert_eq!(check_kmer(b"ATCG-N"), KmerCheck::ContainsNs);
+        // Lower-case n is an N too, even before other checks
+        assert_eq!(check_kmer(b"ATCG-n"), KmerCheck::ContainsNs);
+        assert_eq!(check_kmer(b"nATCG"), KmerCheck::ContainsNs);
+        assert_eq!(check_kmer(b"ATCGnRY"), KmerCheck::ContainsNs);
+        // Other invalid bases still win, whatever the N's case
+        assert_eq!(check_kmer(b"nATCG!"), KmerCheck::ContainsInvalidBases);
+        assert_eq!(check_kmer(b"NATCG!"), KmerCheck::ContainsInvalidBases);
         assert_eq!(check_kmer(b"ATCGX-"), KmerCheck::ContainsInvalidBases);
         assert_eq!(check_kmer(b"ATCGH"), KmerCheck::ContainsAmbiguities);
         assert_eq!(check_kmer(b"ATCG."), KmerCheck::ContainsInvalidBases);

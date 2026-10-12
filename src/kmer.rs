@@ -7,6 +7,9 @@ use crate::primaldimer;
 
 /// Status tag for sequences below `min_freq` (dropped by a normal digest).
 pub const LOW_FREQ: &str = "LowFreq";
+/// Status tag for errors a normal digest skips, e.g. `ContainsN` with
+/// `ignore_n`. Reported for visibility but doesn't fail the kmer.
+pub const IGNORED: &str = "Ignored";
 
 /// Everything a `return_all` digest reports for one kmer: each sequence
 /// with its count and failed checks, kmer-level failures, and alignment
@@ -35,10 +38,10 @@ struct Statuses {
 }
 
 impl Statuses {
-    /// Would a normal digest keep this kmer? Low-frequency entries are
-    /// ignored, as the normal digest drops them before checking.
+    /// Would a normal digest keep this kmer? Low-frequency and ignored
+    /// entries don't count, as the normal digest drops or skips them.
     fn passed(&self) -> bool {
-        let kept = |tags: &Vec<String>| !tags.iter().any(|t| t == LOW_FREQ);
+        let kept = |tags: &Vec<String>| !tags.iter().any(|t| t == LOW_FREQ || t == IGNORED);
         self.kmer.is_empty()
             && self.per_seq.iter().any(kept)
             && self.per_seq.iter().filter(|t| kept(t)).all(|t| t.is_empty())
@@ -265,6 +268,8 @@ impl FKmer {
     }
 
     /// Alignment positions that produced no sequence: (errors, count).
+    /// Errors a normal digest skips are tagged `Ignored` (e.g. `ContainsN`
+    /// with `ignore_n`) and don't affect `passed()`.
     pub fn errors(&self) -> Vec<(Vec<String>, f64)> {
         self.statuses.as_ref().map(|s| s.errors.clone()).unwrap_or_default()
     }
@@ -454,6 +459,8 @@ impl RKmer {
     }
 
     /// Alignment positions that produced no sequence: (errors, count).
+    /// Errors a normal digest skips are tagged `Ignored` (e.g. `ContainsN`
+    /// with `ignore_n`) and don't affect `passed()`.
     pub fn errors(&self) -> Vec<(Vec<String>, f64)> {
         self.statuses.as_ref().map(|s| s.errors.clone()).unwrap_or_default()
     }
@@ -631,6 +638,8 @@ mod tests {
             // A normal digest drops low-frequency entries before checking them
             ("low-freq failing sequence", report(vec![tags(&[]), tags(&["HighGC", "LowFreq"])], vec![], vec![]), true),
             ("low-freq error", report(vec![tags(&[])], vec![], vec![(tags(&["ContainsN", "LowFreq"]), 1.0)]), true),
+            ("ignored error", report(vec![tags(&[])], vec![], vec![(tags(&["ContainsN", "Ignored"]), 1.0)]), true),
+            ("ignored error alone", report(vec![tags(&["LowFreq"])], vec![], vec![(tags(&["ContainsN", "Ignored"]), 1.0)]), false),
             ("only low-freq sequences", report(vec![tags(&["LowFreq"])], vec![], vec![]), false),
             ("no sequences", report(vec![], vec![], vec![]), false),
         ];

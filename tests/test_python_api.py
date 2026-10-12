@@ -273,9 +273,46 @@ def test_return_all_status_vocabulary(msa_path):
     assert kmer_tags <= {"PrimerDimer"}
     assert error_tags <= {
         "InvalidBase", "WalkedOutLeft", "WalkedOutRight", "GapOnSetBase", "NoValidPrimer",
-        "MaxWalk", "ToLong", "ContainsN", "LowFreq",
+        "MaxWalk", "ToLong", "ContainsN", "LowFreq", "Ignored",
     }
     assert all(count > 0 for k in f + r for _, count in k.errors())
+
+
+def n_errors(kmers):
+    return [tags for k in kmers for tags, _ in k.errors() if "ContainsN" in tags]
+
+
+def test_n_reporting_with_and_without_ignore_n(msa_path):
+    d = ps.Digester(msa_path, 1, False)
+    # Without ignore_n: ContainsN fails the kmer
+    f, r, _ = d.digest(thermo_check=True, return_all=True, ignore_n=False)
+    strict = n_errors(f + r)
+    assert strict and all("Ignored" not in t for t in strict)
+    assert all(not k.passed() for k in f + r if any("ContainsN" in t for t, _ in k.errors()))
+    # With ignore_n: still reported, tagged Ignored, and doesn't fail the kmer
+    f, r, _ = d.digest(thermo_check=True, return_all=True, ignore_n=True)
+    ignored = n_errors(f + r)
+    assert ignored and all("Ignored" in t for t in ignored)
+    assert any(k.passed() for k in f + r if any("ContainsN" in t for t, _ in k.errors()))
+    # The same N positions are reported either way
+    assert len(ignored) == len(strict)
+
+
+def test_lowercase_n_in_fasta(tmp_path, msa_path):
+    # The same alignment with its N run written in lower case
+    text = open(msa_path).read()
+    assert "NNNNNN" in text
+    lower = tmp_path / "lower.fasta"
+    lower.write_text(text.replace("NNNNNN", "nnnnnn"))
+    for ignore_n in (False, True):
+        kw = dict(thermo_check=True, return_all=True, ignore_n=ignore_n)
+        f1, r1, logs1 = ps.Digester(msa_path, 1, False).digest(**kw)
+        f2, r2, logs2 = ps.Digester(str(lower), 1, False).digest(**kw)
+        assert by_key(f1 + r1) == by_key(f2 + r2)
+        assert [k.errors() for k in f1 + r1] == [k.errors() for k in f2 + r2]
+        assert logs1 == logs2
+        assert n_errors(f2 + r2)
+        assert "InvalidBase" not in str(logs2)
 
 
 def test_return_all_dimers(msa_path):
