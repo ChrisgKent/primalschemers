@@ -17,6 +17,15 @@ primer3-thal-rs = "0.1"
 [dev-dependencies]
 criterion = "0.5"
 
+# NOTE: no `panic = "abort"` — PyO3 relies on unwinding to turn Rust panics into
+# Python exceptions.
+[profile.release]
+lto = "fat"
+codegen-units = 1
+
+[profile.bench]
+inherits = "release"
+
 [[bench]]
 name = "dimer_bench"
 harness = false
