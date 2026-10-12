@@ -19,6 +19,18 @@ static DMSO_CONC: f64 = 0.0;
 static DMSO_FACT: f64 = 0.0;
 static FORMAMIDE_CONC: f64 = 0.8;
 
+/// thal conditions for the hairpin check: the digest's salt and DNA
+/// concentrations, matching primalscheme3's config (37 °C, max_loop 30).
+fn thal_args() -> primer3_thal_rs::ThalArgs {
+    primer3_thal_rs::ThalArgs {
+        mv: K_MM,
+        dv: DIVALENT_CONC,
+        dntp: DNTP_CONC,
+        dna_conc: DNA_NM,
+        ..Default::default()
+    }
+}
+
 #[derive(Eq, PartialEq, Hash, Debug, Clone)]
 pub enum DigestError {
     InvalidBase,
@@ -81,7 +93,7 @@ impl DigestionKmers {
         let result = match &self.seq {
             Some(seq) => match thermo_check(&seq, dconf) {
                 ThermoResult::Pass => IndexResult::Pass(),
-                _ => IndexResult::ThermoResult(thermo_check(&seq, dconf)),
+                failed => IndexResult::ThermoResult(failed),
             },
             // If
             None => IndexResult::DigestError(DigestError::NoValidPrimer),
@@ -156,7 +168,14 @@ pub fn thermo_check(kmer: &[u8], dconf: &DigestConfig) -> ThermoResult {
         }
     }
 
-    //TODO calc hairpin
+    // Hairpin: fail if its Tm exceeds the limit (as primalscheme3's forms_hairpin)
+    match primer3_thal_rs::calc_hairpin(kmer, &thal_args(), false) {
+        Ok(hairpin) if hairpin.tm > dconf.primer_hairpin_th_max => return ThermoResult::Hairpin,
+        Ok(_) => {}
+        // Only for > 60 nt, which primer_len_max prevents
+        Err(_) => return ThermoResult::Fail,
+    }
+
     ThermoResult::Pass
 }
 
@@ -965,6 +984,67 @@ pub fn digest_f_primer(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A config whose GC, Tm and homopolymer limits pass anything, so only
+    /// the hairpin check can fail.
+    fn hairpin_only_config(primer_hairpin_th_max: f64) -> DigestConfig {
+        DigestConfig::new(
+            None,
+            None,
+            Some(1.0),
+            Some(0.0),
+            Some(1000.0),
+            Some(-1000.0),
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(100),
+            None,
+            None,
+            None,
+            None,
+            Some(primer_hairpin_th_max),
+        )
+    }
+
+    #[test]
+    fn test_hairpin_tm_matches_primer3_py() {
+        // primer3.calc_hairpin(seq, mv_conc=100, dv_conc=2, dntp_conc=0.8, dna_conc=15)
+        let cases = [
+            ("CCCCCATCCGATCAGGGGG", 67.96550347919458),
+            ("ACGTACGTTTTTACGTACGT", 69.16336781546374),
+            ("GTAAAACGACGGCCAGTGAAT", 0.0),
+        ];
+        for (seq, expected) in cases {
+            let res = primer3_thal_rs::calc_hairpin(seq, &thal_args(), false).unwrap();
+            assert!((res.tm - expected).abs() < 1e-6, "{seq}: {} vs {expected}", res.tm);
+        }
+    }
+
+    #[test]
+    fn test_thermo_check_hairpin() {
+        let seq = b"CCCCCATCCGATCAGGGGG"; // hairpin Tm 67.97 °C
+        assert_eq!(
+            thermo_check(seq, &hairpin_only_config(55.0)),
+            ThermoResult::Hairpin
+        );
+        assert_eq!(
+            thermo_check(seq, &hairpin_only_config(100.0)),
+            ThermoResult::Pass
+        );
+        // No hairpin at all (Tm 0) passes any positive limit.
+        assert_eq!(
+            thermo_check(b"GTAAAACGACGGCCAGTGAAT", &hairpin_only_config(1.0)),
+            ThermoResult::Pass
+        );
+    }
+
+    #[test]
+    fn test_default_hairpin_limit() {
+        assert_eq!(DigestConfig::create_default().primer_hairpin_th_max, 55.0);
+    }
 
     #[test]
     fn test_digest_r_to_count() {

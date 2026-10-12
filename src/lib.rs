@@ -66,7 +66,7 @@ impl Digester {
             .collect::<Vec<&[u8]>>()
     }
 
-    #[pyo3(signature = (findexes=None, rindexes=None, primer_len_min=None, primer_len_max=None, primer_gc_max=None, primer_gc_min=None, primer_tm_max=None, primer_tm_min=None, primer_annealing_prop=None, primer_annealing_diff=None, annealing_temp_c=None, max_walk=None, max_homopolymers=None, min_freq=None, ignore_n=None, dimerscore=None, thermo_check=false))]
+    #[pyo3(signature = (findexes=None, rindexes=None, primer_len_min=None, primer_len_max=None, primer_gc_max=None, primer_gc_min=None, primer_tm_max=None, primer_tm_min=None, primer_annealing_prop=None, primer_annealing_diff=None, annealing_temp_c=None, max_walk=None, max_homopolymers=None, min_freq=None, ignore_n=None, dimerscore=None, thermo_check=false, primer_hairpin_th_max=None))]
     pub fn digest(
         &self,
         findexes: Option<Vec<usize>>,
@@ -86,6 +86,7 @@ impl Digester {
         ignore_n: Option<bool>,
         dimerscore: Option<f64>,
         thermo_check: Option<bool>,
+        primer_hairpin_th_max: Option<f64>,
     ) -> PyResult<(Vec<kmer::FKmer>, Vec<kmer::RKmer>, Vec<String>)> {
         // If both annealing are set use annealing
         let thermo_type = match (primer_annealing_prop, annealing_temp_c) {
@@ -110,6 +111,7 @@ impl Digester {
             ignore_n,
             dimerscore,
             thermo_check,
+            primer_hairpin_th_max,
         );
 
         let seq_slice = self.create_seq_slice();
@@ -225,7 +227,7 @@ impl Digester {
 }
 
 #[pyfunction]
-#[pyo3(signature = (msa_path,ncores, remap, findexes=None, rindexes=None, primer_len_min=None, primer_len_max=None, primer_gc_max=None, primer_gc_min=None, primer_tm_max=None, primer_tm_min=None, primer_annealing_prop=None, primer_annealing_diff=None,annealing_temp_c=None, max_walk=None, max_homopolymers=None, min_freq=None, ignore_n=None, dimerscore=None, thermo_check=None))]
+#[pyo3(signature = (msa_path,ncores, remap, findexes=None, rindexes=None, primer_len_min=None, primer_len_max=None, primer_gc_max=None, primer_gc_min=None, primer_tm_max=None, primer_tm_min=None, primer_annealing_prop=None, primer_annealing_diff=None,annealing_temp_c=None, max_walk=None, max_homopolymers=None, min_freq=None, ignore_n=None, dimerscore=None, thermo_check=None, primer_hairpin_th_max=None))]
 fn digest_seq(
     msa_path: &str,
     ncores: usize,
@@ -251,6 +253,7 @@ fn digest_seq(
     ignore_n: Option<bool>,
     dimerscore: Option<f64>,
     thermo_check: Option<bool>,
+    primer_hairpin_th_max: Option<f64>,
 ) -> PyResult<(Vec<kmer::FKmer>, Vec<kmer::RKmer>, Vec<String>)> {
     // Start the spinner
     let spinner = ProgressBar::new_spinner();
@@ -281,6 +284,7 @@ fn digest_seq(
         ignore_n,
         dimerscore,
         thermo_check,
+        primer_hairpin_th_max,
     );
 
     // Read in the MSA

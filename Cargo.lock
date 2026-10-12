@@ -365,7 +365,15 @@ dependencies = [
  "criterion",
  "indicatif",
  "itertools 0.14.0",
+ "primer3-thal-rs",
  "pyo3",
+ "rayon",
+]
+
+[[package]]
+name = "primer3-thal-rs"
+version = "0.1.0"
+dependencies = [
  "rayon",
 ]
 

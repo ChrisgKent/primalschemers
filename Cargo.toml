@@ -12,6 +12,7 @@ rayon = "1.10.0"
 indicatif = {version = "*", features = ["rayon"]}
 itertools = "0.14.0"
 pyo3 = "0.27.2"
+primer3-thal-rs = { path = "../primer3-thal-rs" }
 
 [dev-dependencies]
 criterion = "0.5"

@@ -26,6 +26,8 @@ pub struct DigestConfig {
 
     // Thermo check
     pub thermo_check: bool,
+    // Max hairpin Tm (°C); kmers forming a more stable hairpin fail
+    pub primer_hairpin_th_max: f64,
 }
 
 impl DigestConfig {
@@ -50,6 +52,7 @@ impl DigestConfig {
         ignore_n: Option<bool>,
         dimerscore: Option<f64>,
         thermo_check: Option<bool>,
+        primer_hairpin_th_max: Option<f64>,
     ) -> DigestConfig {
         DigestConfig {
             primer_len_min: primer_len_min.unwrap_or(19),
@@ -72,12 +75,13 @@ impl DigestConfig {
             ignore_n: ignore_n.unwrap_or(false),
             dimerscore: dimerscore.unwrap_or(-26.0),
             thermo_check: thermo_check.unwrap_or(true),
+            primer_hairpin_th_max: primer_hairpin_th_max.unwrap_or(55.0),
         }
     }
     pub fn create_default() -> DigestConfig {
         DigestConfig::new(
             None, None, None, None, None, None, None, None, None, None, None, None, None, None,
-            None, None,
+            None, None, None,
         )
     }
 }
