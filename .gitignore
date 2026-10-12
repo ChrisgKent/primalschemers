@@ -1,1 +1,4 @@
 target
+
+# Local cargo overrides, e.g. [patch] to a sibling primer3-thal-rs checkout
+.cargo/config.toml

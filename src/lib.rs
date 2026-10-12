@@ -14,6 +14,7 @@ pub mod mapping;
 pub mod primaldimer;
 pub mod seqfuncs;
 pub mod seqio;
+pub mod thal;
 pub mod tm;
 
 #[pyclass]
@@ -66,7 +67,7 @@ impl Digester {
             .collect::<Vec<&[u8]>>()
     }
 
-    #[pyo3(signature = (findexes=None, rindexes=None, primer_len_min=None, primer_len_max=None, primer_gc_max=None, primer_gc_min=None, primer_tm_max=None, primer_tm_min=None, primer_annealing_prop=None, primer_annealing_diff=None, annealing_temp_c=None, max_walk=None, max_homopolymers=None, min_freq=None, ignore_n=None, dimerscore=None, thermo_check=false))]
+    #[pyo3(signature = (findexes=None, rindexes=None, primer_len_min=None, primer_len_max=None, primer_gc_max=None, primer_gc_min=None, primer_tm_max=None, primer_tm_min=None, primer_annealing_prop=None, primer_annealing_diff=None, annealing_temp_c=None, max_walk=None, max_homopolymers=None, min_freq=None, ignore_n=None, dimerscore=None, thermo_check=false, primer_hairpin_th_max=None, return_all=None))]
     pub fn digest(
         &self,
         findexes: Option<Vec<usize>>,
@@ -86,6 +87,8 @@ impl Digester {
         ignore_n: Option<bool>,
         dimerscore: Option<f64>,
         thermo_check: Option<bool>,
+        primer_hairpin_th_max: Option<f64>,
+        return_all: Option<bool>,
     ) -> PyResult<(Vec<kmer::FKmer>, Vec<kmer::RKmer>, Vec<String>)> {
         // If both annealing are set use annealing
         let thermo_type = match (primer_annealing_prop, annealing_temp_c) {
@@ -110,6 +113,8 @@ impl Digester {
             ignore_n,
             dimerscore,
             thermo_check,
+            primer_hairpin_th_max,
+            return_all,
         );
 
         let seq_slice = self.create_seq_slice();
@@ -130,8 +135,9 @@ impl Digester {
             let mut fp_count: HashMap<&IndexResult, usize> = HashMap::new();
             for res in digested_f.iter() {
                 match res {
-                    Ok(_) => {
-                        let count = fp_count.entry(&IndexResult::Pass()).or_insert(0);
+                    Ok(kmer) => {
+                        let status = if kmer.passed() { &digest::PASSED } else { &digest::RETURNED_FAILING };
+                        let count = fp_count.entry(status).or_insert(0);
                         *count += 1;
                     }
                     Err(e) => {
@@ -143,8 +149,9 @@ impl Digester {
             let mut rp_count: HashMap<&IndexResult, usize> = HashMap::new();
             for res in digested_r.iter() {
                 match res {
-                    Ok(_) => {
-                        let count = rp_count.entry(&IndexResult::Pass()).or_insert(0);
+                    Ok(kmer) => {
+                        let status = if kmer.passed() { &digest::PASSED } else { &digest::RETURNED_FAILING };
+                        let count = rp_count.entry(status).or_insert(0);
                         *count += 1;
                     }
                     Err(e) => {
@@ -225,7 +232,7 @@ impl Digester {
 }
 
 #[pyfunction]
-#[pyo3(signature = (msa_path,ncores, remap, findexes=None, rindexes=None, primer_len_min=None, primer_len_max=None, primer_gc_max=None, primer_gc_min=None, primer_tm_max=None, primer_tm_min=None, primer_annealing_prop=None, primer_annealing_diff=None,annealing_temp_c=None, max_walk=None, max_homopolymers=None, min_freq=None, ignore_n=None, dimerscore=None, thermo_check=None))]
+#[pyo3(signature = (msa_path,ncores, remap, findexes=None, rindexes=None, primer_len_min=None, primer_len_max=None, primer_gc_max=None, primer_gc_min=None, primer_tm_max=None, primer_tm_min=None, primer_annealing_prop=None, primer_annealing_diff=None,annealing_temp_c=None, max_walk=None, max_homopolymers=None, min_freq=None, ignore_n=None, dimerscore=None, thermo_check=None, primer_hairpin_th_max=None, return_all=None))]
 fn digest_seq(
     msa_path: &str,
     ncores: usize,
@@ -251,6 +258,8 @@ fn digest_seq(
     ignore_n: Option<bool>,
     dimerscore: Option<f64>,
     thermo_check: Option<bool>,
+    primer_hairpin_th_max: Option<f64>,
+    return_all: Option<bool>,
 ) -> PyResult<(Vec<kmer::FKmer>, Vec<kmer::RKmer>, Vec<String>)> {
     // Start the spinner
     let spinner = ProgressBar::new_spinner();
@@ -281,6 +290,8 @@ fn digest_seq(
         ignore_n,
         dimerscore,
         thermo_check,
+        primer_hairpin_th_max,
+        return_all,
     );
 
     // Read in the MSA
@@ -327,8 +338,9 @@ fn digest_seq(
         let mut fp_count: HashMap<&IndexResult, usize> = HashMap::new();
         for res in digested_f.iter() {
             match res {
-                Ok(_) => {
-                    let count = fp_count.entry(&IndexResult::Pass()).or_insert(0);
+                Ok(kmer) => {
+                    let status = if kmer.passed() { &digest::PASSED } else { &digest::RETURNED_FAILING };
+                    let count = fp_count.entry(status).or_insert(0);
                     *count += 1;
                 }
                 Err(e) => {
@@ -340,8 +352,9 @@ fn digest_seq(
         let mut rp_count: HashMap<&IndexResult, usize> = HashMap::new();
         for res in digested_r.iter() {
             match res {
-                Ok(_) => {
-                    let count = rp_count.entry(&IndexResult::Pass()).or_insert(0);
+                Ok(kmer) => {
+                    let status = if kmer.passed() { &digest::PASSED } else { &digest::RETURNED_FAILING };
+                    let count = rp_count.entry(status).or_insert(0);
                     *count += 1;
                 }
                 Err(e) => {
@@ -494,6 +507,7 @@ fn primalschemers(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<kmer::FKmer>()?;
     m.add_class::<kmer::RKmer>()?;
     m.add_class::<Digester>()?;
+    m.add_class::<thal::PyThermoResult>()?;
 
     // Functions
     m.add_function(wrap_pyfunction!(digest_seq, m)?)?;
@@ -504,6 +518,9 @@ fn primalschemers(m: &Bound<'_, PyModule>) -> PyResult<()> {
 
     // Thermo
     m.add_function(wrap_pyfunction!(calc_annealing, m)?)?;
+    m.add_function(wrap_pyfunction!(thal::calc_hairpin, m)?)?;
+    m.add_function(wrap_pyfunction!(thal::calc_homodimer, m)?)?;
+    m.add_function(wrap_pyfunction!(thal::calc_heterodimer, m)?)?;
 
     Ok(())
 }

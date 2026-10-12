@@ -392,6 +392,27 @@ pub fn do_pool_interact_u8(seqs1: &Vec<Vec<u8>>, seqs2: &Vec<Vec<u8>>, t: f64) -
     false
 }
 
+/// Every interacting pair in a pool, as indices `(i, j)` with `i <= j`
+/// (`(i, i)` is a self-dimer). Uses the same test as `do_pool_interact_u8`
+/// on a pool against itself, so this is non-empty exactly when that is true.
+pub fn pool_dimer_pairs(seqs: &[Vec<u8>], t: f64) -> Vec<(usize, usize)> {
+    let revs: Vec<Vec<u8>> = seqs
+        .iter()
+        .map(|s| s.iter().rev().copied().collect())
+        .collect();
+    let mut pairs = Vec::new();
+    for i in 0..seqs.len() {
+        for j in i..seqs.len() {
+            if does_seq1_extend_no_alloc(&seqs[i], &revs[j], t)
+                || does_seq1_extend_no_alloc(&seqs[j], &revs[i], t)
+            {
+                pairs.push((i, j));
+            }
+        }
+    }
+    pairs
+}
+
 pub fn do_pool_interact_u8_slice(seqs1: &Vec<&[u8]>, seqs2: &Vec<&[u8]>, t: f64) -> bool {
     // Create the reverse complement of the sequences
     let mut seqs1_rev: Vec<Vec<u8>> = seqs1.iter().map(|s| s.to_vec()).collect();
@@ -418,6 +439,30 @@ pub fn do_pool_interact_u8_slice(seqs1: &Vec<&[u8]>, seqs2: &Vec<&[u8]>, t: f64)
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_pool_dimer_pairs_agrees_with_pool_check() {
+        let mut state: u64 = 7;
+        let mut next = move || {
+            state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            (state >> 33) as usize
+        };
+        let mut found = 0;
+        for _ in 0..300 {
+            let n = 1 + next() % 5;
+            let pool: Vec<Vec<u8>> = (0..n)
+                .map(|_| (0..18 + next() % 13).map(|_| b"ACGT"[next() % 4]).collect())
+                .collect();
+            let pairs = pool_dimer_pairs(&pool, -26.0);
+            assert_eq!(!pairs.is_empty(), do_pool_interact_u8(&pool, &pool, -26.0));
+            assert!(pairs.iter().all(|&(i, j)| i <= j && j < n));
+            found += pairs.len();
+        }
+        assert!(found > 0, "no interacting pairs generated");
+        // A 3' self-complementary primer dimerises with itself
+        let selfcomp = b"AAAAAAAAAAGCGCGCGCGC".to_vec();
+        assert!(pool_dimer_pairs(&[selfcomp], -26.0).contains(&(0, 0)));
+    }
     #[test]
     fn test_valid_encode_base() {
         let seq = "ATCG";

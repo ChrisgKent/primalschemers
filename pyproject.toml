@@ -16,6 +16,10 @@ classifiers = [
 dynamic = ["version"]
 
 
+[dependency-groups]
+# Python API tests (tests/test_python_api.py); primer3-py is the reference.
+test = ["pytest", "primer3-py==2.3.0"]
+
 [tool.maturin]
 features = ["pyo3/extension-module"]
 
