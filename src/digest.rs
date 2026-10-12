@@ -1,5 +1,5 @@
 use crate::config::{DigestConfig, ThermoType};
-use crate::kmer::{FKmer, RKmer};
+use crate::kmer::{FKmer, KmerReport, RKmer, LOW_FREQ};
 use crate::seqfuncs::{
     check_kmer, complement_base, expand_amb_base, expand_amb_sequence, gc_content, max_homopolymer,
     reverse_complement, KmerCheck,
@@ -67,10 +67,19 @@ pub enum IndexResult {
     NotChecked(),
 }
 
+/// Log status of a kmer kept by the digest.
+pub static PASSED: IndexResult = IndexResult::Pass();
+/// Log status of a kmer returned by `return_all` that a normal digest rejects.
+pub static RETURNED_FAILING: IndexResult = IndexResult::ThermoResult(ThermoResult::Fail);
+
 pub struct DigestionKmers {
     pub seq: Option<Vec<u8>>,
     pub status: Option<IndexResult>,
     pub count: f64,
+    /// `return_all` only: every check the sequence fails.
+    pub failures: Vec<ThermoResult>,
+    /// `return_all` only: below `min_freq` (a normal digest drops these).
+    pub low_freq: bool,
 }
 impl DigestionKmers {
     pub fn new(seq: Option<Vec<u8>>, status: Option<IndexResult>, count: f64) -> DigestionKmers {
@@ -78,6 +87,8 @@ impl DigestionKmers {
             seq: seq,
             status: status,
             count: count,
+            failures: Vec::new(),
+            low_freq: false,
         }
     }
     pub fn calc_freq(&self, total: f64) -> f64 {
@@ -91,6 +102,14 @@ impl DigestionKmers {
         }
         // Returns the None if valid primer
         let result = match &self.seq {
+            // return_all: record every failure; the status is still the first.
+            Some(seq) if dconf.return_all => {
+                self.failures = thermo_failures(seq, dconf, true);
+                match self.failures.first() {
+                    None => IndexResult::Pass(),
+                    Some(failed) => IndexResult::ThermoResult(failed.clone()),
+                }
+            }
             Some(seq) => match thermo_check(&seq, dconf) {
                 ThermoResult::Pass => IndexResult::Pass(),
                 failed => IndexResult::ThermoResult(failed),
@@ -109,19 +128,39 @@ impl DigestionKmers {
     }
 }
 
+/// The first check `kmer` fails, or `Pass`.
 pub fn thermo_check(kmer: &[u8], dconf: &DigestConfig) -> ThermoResult {
+    thermo_failures(kmer, dconf, false)
+        .into_iter()
+        .next()
+        .unwrap_or(ThermoResult::Pass)
+}
+
+/// Every check `kmer` fails, in check order (GC, homopolymer, Tm/annealing,
+/// hairpin). With `all` false, stops at the first failure.
+pub fn thermo_failures(kmer: &[u8], dconf: &DigestConfig, all: bool) -> Vec<ThermoResult> {
+    let mut failures = Vec::new();
+    macro_rules! fail {
+        ($result:expr) => {{
+            failures.push($result);
+            if !all {
+                return failures;
+            }
+        }};
+    }
+
     // Check GC content
     let gc = gc_content(kmer);
     if gc < dconf.primer_gc_min {
-        return ThermoResult::LowGC;
+        fail!(ThermoResult::LowGC);
     }
     if gc > dconf.primer_gc_max {
-        return ThermoResult::HighGC;
+        fail!(ThermoResult::HighGC);
     }
 
     // Check homopolymer
     if max_homopolymer(kmer) > dconf.max_homopolymers {
-        return ThermoResult::Homopolymer;
+        fail!(ThermoResult::Homopolymer);
     }
 
     // Check Tm if using TM Method
@@ -139,10 +178,10 @@ pub fn thermo_check(kmer: &[u8], dconf: &DigestConfig) -> ThermoResult {
                 tm::TmMethod::SantaLucia2004,
             );
             if tm >= dconf.primer_tm_max {
-                return ThermoResult::HighTm;
+                fail!(ThermoResult::HighTm);
             }
             if tm < dconf.primer_tm_min {
-                return ThermoResult::LowTm;
+                fail!(ThermoResult::LowTm);
             }
         }
         ThermoType::ANNEALING => {
@@ -160,23 +199,23 @@ pub fn thermo_check(kmer: &[u8], dconf: &DigestConfig) -> ThermoResult {
             );
 
             if prop > dconf.primer_annealing_prop.unwrap() + dconf.annealing_diff {
-                return ThermoResult::HighAnnealing;
+                fail!(ThermoResult::HighAnnealing);
             }
             if prop < dconf.primer_annealing_prop.unwrap() - dconf.annealing_diff {
-                return ThermoResult::LowAnnealing;
+                fail!(ThermoResult::LowAnnealing);
             }
         }
     }
 
     // Hairpin: fail if its Tm exceeds the limit (as primalscheme3's forms_hairpin)
     match primer3_thal_rs::calc_hairpin(kmer, &thal_args(), false) {
-        Ok(hairpin) if hairpin.tm > dconf.primer_hairpin_th_max => return ThermoResult::Hairpin,
+        Ok(hairpin) if hairpin.tm > dconf.primer_hairpin_th_max => fail!(ThermoResult::Hairpin),
         Ok(_) => {}
         // Only for > 60 nt, which primer_len_max prevents
-        Err(_) => return ThermoResult::Fail,
+        Err(_) => fail!(ThermoResult::Fail),
     }
 
-    ThermoResult::Pass
+    failures
 }
 
 fn process_seqs(
@@ -200,11 +239,84 @@ fn process_seqs(
         digested.push(dk);
     }
 
-    // Apply a freq filter
+    // Apply a freq filter (return_all marks rather than drops)
     let total: f64 = digested.iter().map(|d| d.count).sum();
-    digested.retain(|d| d.calc_freq(total) >= dconf.min_freq);
+    if dconf.return_all {
+        for d in digested.iter_mut() {
+            d.low_freq = d.calc_freq(total) < dconf.min_freq;
+        }
+    } else {
+        digested.retain(|d| d.calc_freq(total) >= dconf.min_freq);
+    }
 
     digested
+}
+
+/// Name of a status as reported to Python, e.g. `HighGC` or `ContainsN`.
+fn status_name(status: &IndexResult) -> String {
+    match status {
+        IndexResult::ThermoResult(t) => format!("{t:?}"),
+        IndexResult::DigestError(e) => format!("{e:?}"),
+        IndexResult::Pass() => "Pass".to_string(),
+        IndexResult::NotChecked() => "NotChecked".to_string(),
+    }
+}
+
+/// Collect a `return_all` report for one index: every sequence with its
+/// failures, the kmer's dimer status, and positions without a sequence.
+/// Errors only if no sequence was produced at all.
+fn report_all(dks: Vec<DigestionKmers>, dconf: &DigestConfig) -> Result<KmerReport, IndexResult> {
+    let mut report = KmerReport {
+        seqs: Vec::new(),
+        counts: Vec::new(),
+        statuses: Vec::new(),
+        kmer_statuses: Vec::new(),
+        errors: Vec::new(),
+    };
+    let mut first_error = None;
+    for dk in dks {
+        let tag = |mut tags: Vec<String>| {
+            if dk.low_freq {
+                tags.push(LOW_FREQ.to_string());
+            }
+            tags
+        };
+        match (&dk.seq, &dk.status) {
+            (Some(_), _) => {
+                let failures = dk.failures.iter().map(|f| format!("{f:?}")).collect();
+                report.statuses.push(tag(failures));
+                report.counts.push(dk.count);
+                report.seqs.push(dk.seq.unwrap());
+            }
+            // Ignored by a normal digest too
+            (None, Some(IndexResult::DigestError(DigestError::EndOfSequence))) => {}
+            (None, Some(IndexResult::DigestError(DigestError::ContainsN))) if dconf.ignore_n => {}
+            (None, status) => {
+                let status = status
+                    .clone()
+                    .unwrap_or(IndexResult::DigestError(DigestError::NoValidPrimer));
+                report.errors.push((tag(vec![status_name(&status)]), dk.count));
+                first_error.get_or_insert(status);
+            }
+        }
+    }
+    if report.seqs.is_empty() {
+        return Err(first_error.unwrap_or(IndexResult::DigestError(DigestError::NoValidPrimer)));
+    }
+    // Dimer check over the sequences a normal digest would keep
+    if dconf.thermo_check {
+        let kept: Vec<Vec<u8>> = report
+            .seqs
+            .iter()
+            .zip(&report.statuses)
+            .filter(|(_, tags)| !tags.iter().any(|t| t == LOW_FREQ))
+            .map(|(seq, _)| seq.clone())
+            .collect();
+        if !kept.is_empty() && primaldimer::do_pool_interact_u8(&kept, &kept, dconf.dimerscore) {
+            report.kmer_statuses.push(format!("{:?}", ThermoResult::PrimerDimer));
+        }
+    }
+    Ok(report)
 }
 
 pub fn opto_binding(
@@ -533,6 +645,9 @@ pub fn digest_r_at_index(
 
     // Process the results
     let dks = process_seqs(kmer_count, dconf);
+    if dconf.return_all {
+        return report_all(dks, dconf).map(|report| RKmer::from_report(report, index));
+    }
 
     for dk in dks.iter() {
         match &dk.status {
@@ -579,40 +694,6 @@ pub fn digest_r_at_index(
     }
 
     Ok(RKmer::new(seqs, index, Some(counts)))
-}
-
-pub fn digest_r_dk(seq_array: &Vec<&[u8]>, dconf: &DigestConfig) -> Vec<Vec<DigestionKmers>> {
-    let indexes: Vec<usize> = (0..seq_array[0].len() + 1).collect();
-
-    // Check that all sequences are the same length
-    for seq in seq_array.iter() {
-        if seq.len() != seq_array[0].len() {
-            panic!("Sequences are not the same length");
-        }
-    }
-
-    let progress_bar = ProgressBar::new(indexes.len() as u64);
-    progress_bar.set_message("rprimer digestion");
-    progress_bar.set_style(
-        ProgressStyle::default_bar()
-            .template("{msg} [{elapsed}] {wide_bar:.cyan/blue} {pos:>7}/{len:7} {eta}")
-            .unwrap(),
-    );
-
-    let results: Vec<Vec<DigestionKmers>> = indexes
-        .par_iter()
-        .progress_with(progress_bar)
-        .map(|i| {
-            let kmer_count: HashMap<Result<Vec<u8>, DigestError>, f64> =
-                digest_r_to_count(seq_array, *i, dconf);
-
-            // Process the results
-            let dks = process_seqs(kmer_count, dconf);
-            dks
-        })
-        .collect();
-
-    results
 }
 
 pub fn digest_r_primer(
@@ -869,6 +950,9 @@ fn digest_f_at_index(
 
     // Process the results
     let dks: Vec<DigestionKmers> = process_seqs(kmer_count, dconf);
+    if dconf.return_all {
+        return report_all(dks, dconf).map(|report| FKmer::from_report(report, index));
+    }
 
     // If any errors are found, return the error
     for dk in dks.iter() {
@@ -915,35 +999,6 @@ fn digest_f_at_index(
     }
 
     Ok(FKmer::new(seqs, index, Some(counts)))
-}
-
-pub fn digest_f_dk(seq_array: &Vec<&[u8]>, dconf: &DigestConfig) -> Vec<Vec<DigestionKmers>> {
-    let indexes: Vec<usize> = (0..seq_array[0].len() + 1).collect();
-    // Check that all sequences are the same length
-    for seq in seq_array.iter() {
-        if seq.len() != seq_array[0].len() {
-            panic!("Sequences are not the same length");
-        }
-    }
-
-    let progress_bar = ProgressBar::new(indexes.len() as u64);
-    progress_bar.set_message("fprimer digestion");
-    progress_bar.set_style(
-        ProgressStyle::default_bar()
-            .template("{msg} [{elapsed}] {wide_bar:.cyan/blue} {pos:>7}/{len:7} {eta}")
-            .unwrap(),
-    );
-
-    let results: Vec<Vec<DigestionKmers>> = indexes
-        .par_iter()
-        .progress_with(progress_bar)
-        .map(|i| {
-            let fkc = digest_f_to_count(&seq_array, *i, dconf);
-            process_seqs(fkc, dconf)
-        })
-        .collect();
-
-    results
 }
 
 pub fn digest_f_primer(
@@ -1006,6 +1061,7 @@ mod tests {
             None,
             None,
             Some(primer_hairpin_th_max),
+            None,
         )
     }
 
@@ -1039,6 +1095,100 @@ mod tests {
             thermo_check(b"GTAAAACGACGGCCAGTGAAT", &hairpin_only_config(1.0)),
             ThermoResult::Pass
         );
+    }
+
+    #[test]
+    fn test_thermo_failures_reports_every_check() {
+        // 74% GC and a 68 °C hairpin
+        let seq = b"CCCCCATCCGATCAGGGGG";
+        let mut dconf = hairpin_only_config(55.0);
+        dconf.primer_gc_max = 0.5;
+        assert_eq!(
+            thermo_failures(seq, &dconf, true),
+            vec![ThermoResult::HighGC, ThermoResult::Hairpin]
+        );
+        // The normal check still stops at the first failure
+        assert_eq!(thermo_check(seq, &dconf), ThermoResult::HighGC);
+        assert_eq!(thermo_failures(seq, &dconf, false), vec![ThermoResult::HighGC]);
+        assert!(thermo_failures(b"GTAAAACGACGGCCAGTGAAT", &hairpin_only_config(55.0), true).is_empty());
+    }
+
+    /// Three aligned variants of a random genome with SNPs, an N run and an
+    /// ambiguity code, so indexes hit thermo failures, digest errors and
+    /// low-frequency sequences.
+    fn variant_alignment() -> Vec<Vec<u8>> {
+        let mut state: u64 = 42;
+        let mut next = move || {
+            state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            (state >> 33) as usize
+        };
+        let genome: Vec<u8> = (0..1500).map(|_| b"ACGT"[next() % 4]).collect();
+        let mut seqs = vec![genome.clone(); 8];
+        for seq in seqs.iter_mut().skip(1) {
+            for _ in 0..12 {
+                let i = next() % seq.len();
+                seq[i] = b"ACGT"[next() % 4];
+            }
+        }
+        seqs[3][700..706].copy_from_slice(b"NNNNNN");
+        seqs[5][900] = b'R';
+        seqs
+    }
+
+    #[test]
+    fn test_return_all_matches_normal_digest() {
+        let seqs = variant_alignment();
+        let seq_refs: Vec<&[u8]> = seqs.iter().map(|s| s.as_slice()).collect();
+        let mut normal = DigestConfig::create_default();
+        normal.min_freq = 0.2; // so some sequences are low frequency
+        let mut all = DigestConfig::create_default();
+        all.min_freq = 0.2;
+        all.return_all = true;
+
+        let (mut kept, mut returned, mut flagged, mut low) = (0, 0, 0, 0);
+        for index in 0..=seqs[0].len() {
+            for forward in [true, false] {
+                let (n, a) = if forward {
+                    (
+                        digest_f_at_index(&seq_refs, index, &normal).map(|k| (k.seqs(), k.counts().clone())),
+                        digest_f_at_index(&seq_refs, index, &all)
+                            .map(|k| (k.seqs(), k.counts().clone(), k.statuses().unwrap(), k.passed())),
+                    )
+                } else {
+                    (
+                        digest_r_at_index(&seq_refs, index, &normal).map(|k| (k.seqs(), k.counts().clone())),
+                        digest_r_at_index(&seq_refs, index, &all)
+                            .map(|k| (k.seqs(), k.counts().clone(), k.statuses().unwrap(), k.passed())),
+                    )
+                };
+                if let Ok((_, _, statuses, _)) = &a {
+                    returned += 1;
+                    low += statuses.iter().filter(|t| t.iter().any(|x| x == LOW_FREQ)).count();
+                    if statuses.iter().any(|t| t.len() > 1) {
+                        flagged += 1;
+                    }
+                }
+                match (n, a) {
+                    (Ok((n_seqs, n_counts)), Ok((a_seqs, a_counts, statuses, passed))) => {
+                        kept += 1;
+                        assert!(passed, "index {index}: normal kept, return_all failed");
+                        // Same kmer once low-frequency sequences are dropped
+                        let keep: Vec<bool> = statuses.iter().map(|t| !t.iter().any(|x| x == LOW_FREQ)).collect();
+                        let a_seqs: Vec<String> = a_seqs.into_iter().zip(&keep).filter(|(_, k)| **k).map(|(s, _)| s).collect();
+                        let a_counts: Vec<f64> = a_counts.unwrap().into_iter().zip(&keep).filter(|(_, k)| **k).map(|(c, _)| c).collect();
+                        assert_eq!(n_seqs, a_seqs, "index {index}");
+                        assert_eq!(n_counts.unwrap(), a_counts, "index {index}");
+                    }
+                    (Ok(_), Err(e)) => panic!("index {index}: normal kept, return_all rejected {e:?}"),
+                    (Err(_), Ok((_, _, _, passed))) => assert!(!passed, "index {index}: normal rejected, return_all passed"),
+                    (Err(_), Err(_)) => {}
+                }
+            }
+        }
+        eprintln!("return_all parity: {kept} kept normally, {returned} returned, {flagged} with a multi-failure sequence, {low} low-frequency sequences");
+        assert!(kept > 0 && returned > kept, "kept {kept}, returned {returned}");
+        assert!(flagged > 0, "no sequence failed more than one check");
+        assert!(low > 0, "no low-frequency sequences");
     }
 
     #[test]

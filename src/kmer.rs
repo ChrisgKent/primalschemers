@@ -5,12 +5,78 @@ use std::str::from_utf8;
 
 use crate::primaldimer;
 
+/// Status tag for sequences below `min_freq` (dropped by a normal digest).
+pub const LOW_FREQ: &str = "LowFreq";
+
+/// Everything a `return_all` digest reports for one kmer: each sequence
+/// with its count and failed checks, kmer-level failures, and alignment
+/// positions that produced no sequence.
+pub struct KmerReport {
+    pub seqs: Vec<Vec<u8>>,
+    pub counts: Vec<f64>,
+    /// Failed checks per sequence (empty = passed), aligned with `seqs`.
+    pub statuses: Vec<Vec<String>>,
+    /// Failures of the kmer as a whole, e.g. `PrimerDimer`.
+    pub kmer_statuses: Vec<String>,
+    /// Positions with no sequence: their errors and count.
+    pub errors: Vec<(Vec<String>, f64)>,
+}
+
+/// Per-sequence status fields of a kmer built by a `return_all` digest.
+#[derive(Debug, Default, PartialEq, PartialOrd)]
+struct Statuses {
+    per_seq: Vec<Vec<String>>,
+    kmer: Vec<String>,
+    errors: Vec<(Vec<String>, f64)>,
+}
+
+impl Statuses {
+    /// Would a normal digest keep this kmer? Low-frequency entries are
+    /// ignored, as the normal digest drops them before checking.
+    fn passed(&self) -> bool {
+        let kept = |tags: &Vec<String>| !tags.iter().any(|t| t == LOW_FREQ);
+        self.kmer.is_empty()
+            && self.per_seq.iter().any(kept)
+            && self.per_seq.iter().filter(|t| kept(t)).all(|t| t.is_empty())
+            && self.errors.iter().filter(|(t, _)| kept(t)).count() == 0
+    }
+}
+
+/// Sort a report's sequences, keeping counts and statuses aligned.
+/// Sequences from a digest are unique, so no merging is needed.
+fn sorted_report(report: KmerReport) -> (Vec<Vec<u8>>, Vec<f64>, Statuses) {
+    let mut rows: Vec<(Vec<u8>, f64, Vec<String>)> = report
+        .seqs
+        .into_iter()
+        .zip(report.counts)
+        .zip(report.statuses)
+        .map(|((seq, count), status)| (seq, count, status))
+        .collect();
+    rows.sort_by(|a, b| a.0.cmp(&b.0));
+    let mut seqs = Vec::with_capacity(rows.len());
+    let mut counts = Vec::with_capacity(rows.len());
+    let mut per_seq = Vec::with_capacity(rows.len());
+    for (seq, count, status) in rows {
+        seqs.push(seq);
+        counts.push(count);
+        per_seq.push(status);
+    }
+    let statuses = Statuses {
+        per_seq,
+        kmer: report.kmer_statuses,
+        errors: report.errors,
+    };
+    (seqs, counts, statuses)
+}
+
 #[derive(Debug, PartialEq, PartialOrd)]
 #[pyclass]
 pub struct FKmer {
     seqs: Vec<Vec<u8>>,
     counts: Option<Vec<f64>>,
     end: usize,
+    /// Set only by a `return_all` digest.
+    statuses: Option<Statuses>,
 }
 
 // Implement Eq manually by ignoring the counts field
@@ -26,6 +92,19 @@ impl Ord for FKmer {
         }
     }
 }
+impl FKmer {
+    /// A kmer from a `return_all` digest, carrying every sequence's status.
+    pub fn from_report(report: KmerReport, end: usize) -> FKmer {
+        let (seqs, counts, statuses) = sorted_report(report);
+        FKmer {
+            seqs,
+            counts: Some(counts),
+            end,
+            statuses: Some(statuses),
+        }
+    }
+}
+
 #[pymethods]
 impl FKmer {
     #[pyo3(signature = (seqs, end, counts=None,))]
@@ -68,6 +147,7 @@ impl FKmer {
             seqs: sorted_seqs,
             end: end,
             counts: sorted_counts,
+            statuses: None,
         }
     }
     pub fn starts(&self) -> Vec<usize> {
@@ -154,6 +234,28 @@ impl FKmer {
     pub fn counts_sum(&self) -> Option<f64> {
         self.counts.as_ref().map(|c| c.iter().sum())
     }
+
+    /// Failed checks per sequence, aligned with `seqs()` (empty = passed);
+    /// None unless digested with `return_all`.
+    pub fn statuses(&self) -> Option<Vec<Vec<String>>> {
+        self.statuses.as_ref().map(|s| s.per_seq.clone())
+    }
+
+    /// Failures of the kmer as a whole (e.g. `PrimerDimer`).
+    pub fn kmer_statuses(&self) -> Vec<String> {
+        self.statuses.as_ref().map(|s| s.kmer.clone()).unwrap_or_default()
+    }
+
+    /// Alignment positions that produced no sequence: (errors, count).
+    pub fn errors(&self) -> Vec<(Vec<String>, f64)> {
+        self.statuses.as_ref().map(|s| s.errors.clone()).unwrap_or_default()
+    }
+
+    /// Whether a normal digest would keep this kmer. Always true for kmers
+    /// not digested with `return_all`.
+    pub fn passed(&self) -> bool {
+        self.statuses.as_ref().is_none_or(Statuses::passed)
+    }
 }
 
 #[pyclass]
@@ -162,6 +264,8 @@ pub struct RKmer {
     seqs: Vec<Vec<u8>>,
     counts: Option<Vec<f64>>,
     start: usize,
+    /// Set only by a `return_all` digest.
+    statuses: Option<Statuses>,
 }
 
 // Implement Eq manually by ignoring the counts field
@@ -174,6 +278,19 @@ impl Ord for RKmer {
         match self.seqs.cmp(&other.seqs) {
             std::cmp::Ordering::Equal => self.start.cmp(&other.start),
             ordering => ordering,
+        }
+    }
+}
+
+impl RKmer {
+    /// A kmer from a `return_all` digest, carrying every sequence's status.
+    pub fn from_report(report: KmerReport, start: usize) -> RKmer {
+        let (seqs, counts, statuses) = sorted_report(report);
+        RKmer {
+            seqs,
+            counts: Some(counts),
+            start,
+            statuses: Some(statuses),
         }
     }
 }
@@ -221,6 +338,7 @@ impl RKmer {
             seqs: sorted_seqs,
             counts: sorted_counts,
             start: start,
+            statuses: None,
         }
     }
     pub fn seqs(&self) -> Vec<String> {
@@ -297,6 +415,28 @@ impl RKmer {
 
     pub fn counts_sum(&self) -> Option<f64> {
         self.counts.as_ref().map(|c| c.iter().sum())
+    }
+
+    /// Failed checks per sequence, aligned with `seqs()` (empty = passed);
+    /// None unless digested with `return_all`.
+    pub fn statuses(&self) -> Option<Vec<Vec<String>>> {
+        self.statuses.as_ref().map(|s| s.per_seq.clone())
+    }
+
+    /// Failures of the kmer as a whole (e.g. `PrimerDimer`).
+    pub fn kmer_statuses(&self) -> Vec<String> {
+        self.statuses.as_ref().map(|s| s.kmer.clone()).unwrap_or_default()
+    }
+
+    /// Alignment positions that produced no sequence: (errors, count).
+    pub fn errors(&self) -> Vec<(Vec<String>, f64)> {
+        self.statuses.as_ref().map(|s| s.errors.clone()).unwrap_or_default()
+    }
+
+    /// Whether a normal digest would keep this kmer. Always true for kmers
+    /// not digested with `return_all`.
+    pub fn passed(&self) -> bool {
+        self.statuses.as_ref().is_none_or(Statuses::passed)
     }
 }
 
