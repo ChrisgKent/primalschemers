@@ -1,8 +1,10 @@
 use pyo3::prelude::*;
 use std::collections::HashMap;
 
-use crate::{kmer, mapping, seqio};
+use crate::{kmer, seqio};
 
+// Unused scaffolding for a Rust-side MSA class.
+#[allow(dead_code, clippy::upper_case_acronyms)]
 #[pyclass]
 struct MSA {
     name: String,
@@ -23,6 +25,7 @@ struct MSA {
     rkmers: Option<Vec<kmer::RKmer>>,
 }
 
+#[allow(dead_code)]
 impl MSA {
     fn new(name: &str, path: String, msa_index: usize, ncores: usize, uuid: String) -> Self {
         // Create the thread_pool
@@ -50,7 +53,7 @@ impl MSA {
 
         MSA {
             name: name.to_string(),
-            path: path,
+            path,
             msa_index,
             _thread_pool,
             _seq_array,

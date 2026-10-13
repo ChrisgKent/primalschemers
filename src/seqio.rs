@@ -54,15 +54,15 @@ pub fn remove_end_insertions(mut seq_array: Vec<Vec<u8>>) -> Vec<Vec<u8>> {
     }
     seq_array
 }
-pub fn calc_most_common_base(seq_array: &Vec<Vec<u8>>) -> Vec<u8> {
+pub fn calc_most_common_base(seq_array: &[Vec<u8>]) -> Vec<u8> {
     // If equal values. Will last in order of ACGT
     let indexes = 0..seq_array[0].len();
     let most_common_base = indexes
         .into_par_iter()
         .map(|basei| {
             let mut base_count: Vec<usize> = vec![0; 4];
-            for seqi in 0..seq_array.len() {
-                match seq_array[seqi][basei] {
+            for seq in seq_array {
+                match seq[basei] {
                     b'A' => base_count[0] += 1,
                     b'C' => base_count[1] += 1,
                     b'G' => base_count[2] += 1,

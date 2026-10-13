@@ -163,11 +163,8 @@ pub fn seq2_overhang_dg(seq1: &u8, seq2: &u8, seq2_overhang: &u8) -> Option<f64>
 pub fn match_array(base1: u8, base2: u8) -> bool {
     // Given two encodes bases; ie MATCH_ARRAY[base][base]
     // With return if these bases are a match (bool)
-    match (base1, base2) {
-        (b'A', b'T') => true,
-        (b'T', b'A') => true,
-        (b'C', b'G') => true,
-        (b'G', b'C') => true,
-        _ => false,
-    }
+    matches!(
+        (base1, base2),
+        (b'A', b'T') | (b'T', b'A') | (b'C', b'G') | (b'G', b'C')
+    )
 }

@@ -3,10 +3,7 @@ pub fn create_mapping_array(seq: &[u8], remap: bool) -> Vec<Option<usize>> {
 
     // Mapping array of just the index at each index
     if !remap {
-        for i in 0..seq.len() {
-            mapping_array[i] = Some(i)
-        }
-        return mapping_array;
+        return (0..seq.len()).map(Some).collect();
     }
     let mut i = 0;
     for (index, base) in seq.iter().enumerate() {
@@ -21,17 +18,14 @@ pub fn create_mapping_array(seq: &[u8], remap: bool) -> Vec<Option<usize>> {
     mapping_array
 }
 
-pub fn create_ref_to_msa(mapping_array: &Vec<Option<usize>>) -> Vec<usize> {
+pub fn create_ref_to_msa(mapping_array: &[Option<usize>]) -> Vec<usize> {
     let mut ref_to_msa: Vec<usize> = vec![0; mapping_array.len()];
     let mut final_pos = 0;
 
     for (index, ref_index) in mapping_array.iter().enumerate() {
-        match ref_index {
-            Some(ref_i) => {
-                ref_to_msa[*ref_i] = index;
-                final_pos = *ref_i;
-            }
-            None => {}
+        if let Some(ref_i) = ref_index {
+            ref_to_msa[*ref_i] = index;
+            final_pos = *ref_i;
         }
     }
     // As array is created with size of mapping array, we need to resize it to the final position

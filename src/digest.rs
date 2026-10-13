@@ -68,9 +68,9 @@ pub struct DigestionKmers {
 impl DigestionKmers {
     pub fn new(seq: Option<Vec<u8>>, status: Option<IndexResult>, count: f64) -> DigestionKmers {
         DigestionKmers {
-            seq: seq,
-            status: status,
-            count: count,
+            seq,
+            status,
+            count,
             failures: Vec::new(),
             low_freq: false,
         }
@@ -94,7 +94,7 @@ impl DigestionKmers {
                     Some(failed) => IndexResult::ThermoResult(failed.clone()),
                 }
             }
-            Some(seq) => match thermo_check(&seq, dconf) {
+            Some(seq) => match thermo_check(seq, dconf) {
                 ThermoResult::Pass => IndexResult::Pass(),
                 failed => IndexResult::ThermoResult(failed),
             },
@@ -198,14 +198,11 @@ fn process_seqs(
         let dk = match k {
             Ok(s) => {
                 // If sequence provided check thermo
-                let mut dk = DigestionKmers::new(Some(s), None, v as f64);
+                let mut dk = DigestionKmers::new(Some(s), None, v);
                 dk._thermo_check(dconf);
                 dk
             }
-            Err(e) => {
-                let dk = DigestionKmers::new(None, Some(IndexResult::DigestError(e)), v as f64);
-                dk
-            }
+            Err(e) => DigestionKmers::new(None, Some(IndexResult::DigestError(e)), v),
         };
         digested.push(dk);
     }
@@ -272,7 +269,9 @@ fn report_all(dks: Vec<DigestionKmers>, dconf: &DigestConfig) -> Result<KmerRepo
                 let status = status
                     .clone()
                     .unwrap_or(IndexResult::DigestError(DigestError::NoValidPrimer));
-                report.errors.push((tag(vec![status_name(&status)]), dk.count));
+                report
+                    .errors
+                    .push((tag(vec![status_name(&status)]), dk.count));
                 first_error.get_or_insert(status);
             }
         }
@@ -292,7 +291,9 @@ fn report_all(dks: Vec<DigestionKmers>, dconf: &DigestConfig) -> Result<KmerRepo
             .map(|(a, b)| (kept[a], kept[b]))
             .collect();
         if !report.dimers.is_empty() {
-            report.kmer_statuses.push(format!("{:?}", ThermoResult::PrimerDimer));
+            report
+                .kmer_statuses
+                .push(format!("{:?}", ThermoResult::PrimerDimer));
         }
     }
     Ok(report)
@@ -335,7 +336,7 @@ pub fn opto_binding(
         let c = return_map.entry(r).or_insert(0.0);
         *c += v;
     }
-    return return_map;
+    return_map
 }
 
 pub fn dedup_substr(
@@ -364,7 +365,7 @@ pub fn dedup_substr(
             }
         }
     }
-    return seq_counts;
+    seq_counts
 }
 
 pub fn walk_right(
@@ -483,13 +484,10 @@ pub fn digest_r_to_count(
         kmer.extend_from_slice(&seq[index..rhs]);
 
         // Remove gaps from the kmer
-        kmer = kmer
-            .into_iter()
-            .filter(|b| *b != b'-' && *b != b' ')
-            .collect();
+        kmer.retain(|b| *b != b'-' && *b != b' ');
 
         // Should not happen. As if set base is gap, it will be caught above
-        if kmer.len() == 0 {
+        if kmer.is_empty() {
             let c = kmer_count
                 .entry(Err(DigestError::NoValidPrimer))
                 .or_insert(0.0);
@@ -524,9 +522,9 @@ pub fn digest_r_to_count(
                         let num_kmers = expanded_kmer.len();
                         for ek in expanded_kmer.into_iter() {
                             let results = match tm::Oligo::new(ek) {
-                    Ok(oligo) => walk_right(seq, index, rhs, oligo, dconf),
-                    Err(_) => vec![Err(DigestError::InvalidBase)],
-                };
+                                Ok(oligo) => walk_right(seq, index, rhs, oligo, dconf),
+                                Err(_) => vec![Err(DigestError::InvalidBase)],
+                            };
                             let num_results = results.len() as f64;
                             for r in results {
                                 let count = kmer_count.entry(r).or_insert(0.0);
@@ -611,14 +609,14 @@ pub fn digest_r_at_index(
     // Filter EOS
     let dks: Vec<DigestionKmers> = dks.into_iter().filter(|dk| dk.seq.is_some()).collect();
     let counts = dks.iter().map(|dk| dk.count).collect::<Vec<f64>>();
-    let seqs = dks.into_iter().map(|dk| dk.seq.unwrap()).collect();
+    let seqs: Vec<Vec<u8>> = dks.into_iter().map(|dk| dk.seq.unwrap()).collect();
 
     // Skip dimer checks is no-thermo
     if dconf.thermo_check && primaldimer::do_pool_interact_u8(&seqs, &seqs, dconf.dimerscore) {
         return Err(IndexResult::ThermoResult(ThermoResult::PrimerDimer));
     }
 
-    if seqs.len() == 0 {
+    if seqs.is_empty() {
         return Err(IndexResult::DigestError(DigestError::NoValidPrimer));
     }
 
@@ -655,7 +653,7 @@ pub fn digest_r_primer(
     let results: Vec<Result<RKmer, IndexResult>> = indexes
         .par_iter()
         .progress_with(progress_bar)
-        .map(|i| digest_r_at_index(&seq_array, *i, dconf))
+        .map(|i| digest_r_at_index(seq_array, *i, dconf))
         .collect();
 
     results
@@ -785,13 +783,10 @@ pub fn digest_f_to_count(
         kmer = reverse_complement(&kmer); // Reverse is used as push is .O(1) and .insert(0) is O(n)
 
         // Remove gaps from the kmer
-        kmer = kmer
-            .into_iter()
-            .filter(|b| *b != b'-' && *b != b' ')
-            .collect();
+        kmer.retain(|b| *b != b'-' && *b != b' ');
 
         // Should not happen. As if set base is gap, it will be caught above
-        if kmer.len() == 0 {
+        if kmer.is_empty() {
             let c = kmer_count
                 .entry(Err(DigestError::NoValidPrimer))
                 .or_insert(0.0);
@@ -826,9 +821,9 @@ pub fn digest_f_to_count(
                         let num_kmers = expanded_kmer.len();
                         for ek in expanded_kmer.into_iter() {
                             let results = match tm::Oligo::new(ek) {
-                    Ok(oligo) => walk_left(seq, lhs, index, oligo, dconf),
-                    Err(_) => vec![Err(DigestError::InvalidBase)],
-                };
+                                Ok(oligo) => walk_left(seq, lhs, index, oligo, dconf),
+                                Err(_) => vec![Err(DigestError::InvalidBase)],
+                            };
                             let num_results = results.len() as f64;
                             for r in results {
                                 let count = kmer_count.entry(r).or_insert(0.0);
@@ -920,12 +915,12 @@ fn digest_f_at_index(
     let dks: Vec<DigestionKmers> = dks.into_iter().filter(|dk| dk.seq.is_some()).collect();
 
     let counts = dks.iter().map(|dk| dk.count).collect::<Vec<f64>>();
-    let seqs = dks.into_iter().map(|dk| dk.seq.unwrap()).collect();
+    let seqs: Vec<Vec<u8>> = dks.into_iter().map(|dk| dk.seq.unwrap()).collect();
     // Skip dimer checks is no-thermo
     if dconf.thermo_check && primaldimer::do_pool_interact_u8(&seqs, &seqs, dconf.dimerscore) {
         return Err(IndexResult::ThermoResult(ThermoResult::PrimerDimer));
     }
-    if seqs.len() == 0 {
+    if seqs.is_empty() {
         return Err(IndexResult::DigestError(DigestError::NoValidPrimer));
     }
 
@@ -961,7 +956,7 @@ pub fn digest_f_primer(
     let results: Vec<Result<FKmer, IndexResult>> = indexes
         .par_iter()
         .progress_with(progress_bar)
-        .map(|i| digest_f_at_index(&seq_array, *i, dconf))
+        .map(|i| digest_f_at_index(seq_array, *i, dconf))
         .collect();
 
     results
@@ -1022,7 +1017,11 @@ mod tests {
         ];
         for (seq, primer3) in cases {
             let res = primer3_thal_rs::calc_hairpin(seq, &args, false).unwrap();
-            assert!((res.tm - primer3).abs() < 1e-6, "{seq}: {} vs {primer3}", res.tm);
+            assert!(
+                (res.tm - primer3).abs() < 1e-6,
+                "{seq}: {} vs {primer3}",
+                res.tm
+            );
         }
         let none = primer3_thal_rs::calc_hairpin("GTAAAACGACGGCCAGTGAAT", &args, false);
         assert_eq!(none.unwrap().tm, 0.0);
@@ -1035,13 +1034,20 @@ mod tests {
         let seqs: Vec<&[u8]> = vec![b"ACGTACGT", b"ACGTACGT"];
         let counts = digest_r_to_count(&seqs, 0, &dconf);
         assert_eq!(counts.get(&Err(DigestError::WalkedOutRight)), Some(&2.0));
-        assert!(digest_r_primer(&seqs, &dconf, None).iter().all(|r| r.is_err()));
-        assert!(digest_f_primer(&seqs, &dconf, None).iter().all(|r| r.is_err()));
+        assert!(digest_r_primer(&seqs, &dconf, None)
+            .iter()
+            .all(|r| r.is_err()));
+        assert!(digest_f_primer(&seqs, &dconf, None)
+            .iter()
+            .all(|r| r.is_err()));
     }
 
     #[test]
     fn test_returned_failing_is_its_own_status() {
-        assert_ne!(RETURNED_FAILING, IndexResult::ThermoResult(ThermoResult::Fail));
+        assert_ne!(
+            RETURNED_FAILING,
+            IndexResult::ThermoResult(ThermoResult::Fail)
+        );
         assert_eq!(status_name(&RETURNED_FAILING), "ReturnedFailing");
     }
 
@@ -1062,7 +1068,10 @@ mod tests {
         // The Tm window follows the configured salt, not fixed conditions
         let seq = b"ACCAACGATGGTGTGTCCAT";
         let mut dconf = hairpin_only_config(100.0);
-        let low_salt = ThalArgs { mv: 20.0, ..conditions() };
+        let low_salt = ThalArgs {
+            mv: 20.0,
+            ..conditions()
+        };
         let tm = tm::oligo_tm(seq, &dconf.thal).unwrap();
         let tm_low = tm::oligo_tm(seq, &low_salt).unwrap();
         assert!(tm_low < tm - 1.0);
@@ -1104,9 +1113,18 @@ mod tests {
         // the limit, as primalscheme3's `tm > primer_hairpin_th_max`.
         let args = hairpin_only_config(0.0).hairpin_thal();
         let tm = primer3_thal_rs::calc_hairpin(seq, &args, false).unwrap().tm;
-        assert_eq!(thermo_check(seq, &hairpin_only_config(tm - 0.01)), ThermoResult::Hairpin);
-        assert_eq!(thermo_check(seq, &hairpin_only_config(tm)), ThermoResult::Pass);
-        assert_eq!(thermo_check(seq, &hairpin_only_config(tm + 0.01)), ThermoResult::Pass);
+        assert_eq!(
+            thermo_check(seq, &hairpin_only_config(tm - 0.01)),
+            ThermoResult::Hairpin
+        );
+        assert_eq!(
+            thermo_check(seq, &hairpin_only_config(tm)),
+            ThermoResult::Pass
+        );
+        assert_eq!(
+            thermo_check(seq, &hairpin_only_config(tm + 0.01)),
+            ThermoResult::Pass
+        );
         // No hairpin at all (Tm 0) passes any positive limit.
         assert_eq!(
             thermo_check(b"GTAAAACGACGGCCAGTGAAT", &hairpin_only_config(1.0)),
@@ -1126,8 +1144,13 @@ mod tests {
         );
         // The normal check still stops at the first failure
         assert_eq!(thermo_check(seq, &dconf), ThermoResult::HighGC);
-        assert_eq!(thermo_failures(seq, &dconf, false), vec![ThermoResult::HighGC]);
-        assert!(thermo_failures(b"GTAAAACGACGGCCAGTGAAT", &hairpin_only_config(55.0), true).is_empty());
+        assert_eq!(
+            thermo_failures(seq, &dconf, false),
+            vec![ThermoResult::HighGC]
+        );
+        assert!(
+            thermo_failures(b"GTAAAACGACGGCCAGTGAAT", &hairpin_only_config(55.0), true).is_empty()
+        );
     }
 
     /// Three aligned variants of a random genome with SNPs, an N run and an
@@ -1136,7 +1159,9 @@ mod tests {
     fn variant_alignment() -> Vec<Vec<u8>> {
         let mut state: u64 = 42;
         let mut next = move || {
-            state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            state = state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
             (state >> 33) as usize
         };
         let genome: Vec<u8> = (0..1500).map(|_| b"ACGT"[next() % 4]).collect();
@@ -1195,7 +1220,8 @@ mod tests {
             for forward in [true, false] {
                 let (n, a) = if forward {
                     (
-                        digest_f_at_index(&seq_refs, index, &normal).map(|k| (k.seqs(), k.counts().clone())),
+                        digest_f_at_index(&seq_refs, index, &normal)
+                            .map(|k| (k.seqs(), k.counts().clone())),
                         digest_f_at_index(&seq_refs, index, &all).map(|k| {
                             assert_eq!(
                                 !k.dimers().is_empty(),
@@ -1203,12 +1229,18 @@ mod tests {
                                 "index {index}"
                             );
                             dimer_kmers += !k.dimers().is_empty() as usize;
-                            (k.seqs(), k.counts().clone(), k.statuses().unwrap(), k.passed())
+                            (
+                                k.seqs(),
+                                k.counts().clone(),
+                                k.statuses().unwrap(),
+                                k.passed(),
+                            )
                         }),
                     )
                 } else {
                     (
-                        digest_r_at_index(&seq_refs, index, &normal).map(|k| (k.seqs(), k.counts().clone())),
+                        digest_r_at_index(&seq_refs, index, &normal)
+                            .map(|k| (k.seqs(), k.counts().clone())),
                         digest_r_at_index(&seq_refs, index, &all).map(|k| {
                             assert_eq!(
                                 !k.dimers().is_empty(),
@@ -1216,13 +1248,21 @@ mod tests {
                                 "index {index}"
                             );
                             dimer_kmers += !k.dimers().is_empty() as usize;
-                            (k.seqs(), k.counts().clone(), k.statuses().unwrap(), k.passed())
+                            (
+                                k.seqs(),
+                                k.counts().clone(),
+                                k.statuses().unwrap(),
+                                k.passed(),
+                            )
                         }),
                     )
                 };
                 if let Ok((_, _, statuses, _)) = &a {
                     returned += 1;
-                    low += statuses.iter().filter(|t| t.iter().any(|x| x == LOW_FREQ)).count();
+                    low += statuses
+                        .iter()
+                        .filter(|t| t.iter().any(|x| x == LOW_FREQ))
+                        .count();
                     if statuses.iter().any(|t| t.len() > 1) {
                         flagged += 1;
                     }
@@ -1232,20 +1272,41 @@ mod tests {
                         kept += 1;
                         assert!(passed, "index {index}: normal kept, return_all failed");
                         // Same kmer once low-frequency sequences are dropped
-                        let keep: Vec<bool> = statuses.iter().map(|t| !t.iter().any(|x| x == LOW_FREQ)).collect();
-                        let a_seqs: Vec<String> = a_seqs.into_iter().zip(&keep).filter(|(_, k)| **k).map(|(s, _)| s).collect();
-                        let a_counts: Vec<f64> = a_counts.unwrap().into_iter().zip(&keep).filter(|(_, k)| **k).map(|(c, _)| c).collect();
+                        let keep: Vec<bool> = statuses
+                            .iter()
+                            .map(|t| !t.iter().any(|x| x == LOW_FREQ))
+                            .collect();
+                        let a_seqs: Vec<String> = a_seqs
+                            .into_iter()
+                            .zip(&keep)
+                            .filter(|(_, k)| **k)
+                            .map(|(s, _)| s)
+                            .collect();
+                        let a_counts: Vec<f64> = a_counts
+                            .unwrap()
+                            .into_iter()
+                            .zip(&keep)
+                            .filter(|(_, k)| **k)
+                            .map(|(c, _)| c)
+                            .collect();
                         assert_eq!(n_seqs, a_seqs, "index {index}");
                         assert_eq!(n_counts.unwrap(), a_counts, "index {index}");
                     }
-                    (Ok(_), Err(e)) => panic!("index {index}: normal kept, return_all rejected {e:?}"),
-                    (Err(_), Ok((_, _, _, passed))) => assert!(!passed, "index {index}: normal rejected, return_all passed"),
+                    (Ok(_), Err(e)) => {
+                        panic!("index {index}: normal kept, return_all rejected {e:?}")
+                    }
+                    (Err(_), Ok((_, _, _, passed))) => {
+                        assert!(!passed, "index {index}: normal rejected, return_all passed")
+                    }
                     (Err(_), Err(_)) => {}
                 }
             }
         }
         eprintln!("return_all parity: {kept} kept normally, {returned} returned, {flagged} with a multi-failure sequence, {low} low-frequency sequences, {dimer_kmers} with dimer pairs");
-        assert!(kept > 0 && returned >= kept, "kept {kept}, returned {returned}");
+        assert!(
+            kept > 0 && returned >= kept,
+            "kept {kept}, returned {returned}"
+        );
         if all.thermo_check {
             assert!(returned > kept, "nothing was rejected");
             assert!(flagged > 0, "no sequence failed more than one check");
@@ -1270,30 +1331,78 @@ mod tests {
         let hairpin = b"CCCCCATCCGATCAGGGGG"; // hairpin Tm 68 °C
         type Tweak = fn(&mut DigestConfig);
         let cases: [(&str, &[u8], Tweak, ThermoResult); 9] = [
-            ("low gc", plain, |c| c.primer_gc_min = 0.9, ThermoResult::LowGC),
-            ("high gc", plain, |c| c.primer_gc_max = 0.1, ThermoResult::HighGC),
-            ("homopolymer", homopolymer, |c| c.max_homopolymers = 3, ThermoResult::Homopolymer),
-            ("high tm", plain, |c| c.primer_tm_max = 0.0, ThermoResult::HighTm),
-            ("low tm", plain, |c| c.primer_tm_min = 1000.0, ThermoResult::LowTm),
-            ("high annealing", plain, |c| {
-                c.thermo_type = ThermoType::ANNEALING;
-                c.primer_annealing_prop = Some(-1000.0);
-                c.annealing_diff = 0.0;
-            }, ThermoResult::HighAnnealing),
-            ("low annealing", plain, |c| {
-                c.thermo_type = ThermoType::ANNEALING;
-                c.primer_annealing_prop = Some(1000.0);
-                c.annealing_diff = 0.0;
-            }, ThermoResult::LowAnnealing),
-            ("hairpin", hairpin, |c| c.primer_hairpin_th_max = 55.0, ThermoResult::Hairpin),
+            (
+                "low gc",
+                plain,
+                |c| c.primer_gc_min = 0.9,
+                ThermoResult::LowGC,
+            ),
+            (
+                "high gc",
+                plain,
+                |c| c.primer_gc_max = 0.1,
+                ThermoResult::HighGC,
+            ),
+            (
+                "homopolymer",
+                homopolymer,
+                |c| c.max_homopolymers = 3,
+                ThermoResult::Homopolymer,
+            ),
+            (
+                "high tm",
+                plain,
+                |c| c.primer_tm_max = 0.0,
+                ThermoResult::HighTm,
+            ),
+            (
+                "low tm",
+                plain,
+                |c| c.primer_tm_min = 1000.0,
+                ThermoResult::LowTm,
+            ),
+            (
+                "high annealing",
+                plain,
+                |c| {
+                    c.thermo_type = ThermoType::ANNEALING;
+                    c.primer_annealing_prop = Some(-1000.0);
+                    c.annealing_diff = 0.0;
+                },
+                ThermoResult::HighAnnealing,
+            ),
+            (
+                "low annealing",
+                plain,
+                |c| {
+                    c.thermo_type = ThermoType::ANNEALING;
+                    c.primer_annealing_prop = Some(1000.0);
+                    c.annealing_diff = 0.0;
+                },
+                ThermoResult::LowAnnealing,
+            ),
+            (
+                "hairpin",
+                hairpin,
+                |c| c.primer_hairpin_th_max = 55.0,
+                ThermoResult::Hairpin,
+            ),
             // Hairpin calculation refuses > 60 nt; primer_len_max normally prevents it
             ("too long", &[b'A'; 61], |_| {}, ThermoResult::Fail),
         ];
         for (name, seq, tweak, expected) in cases {
             let mut dconf = permissive_config();
             tweak(&mut dconf);
-            assert_eq!(thermo_failures(seq, &dconf, true), vec![expected.clone()], "{name}");
-            assert_eq!(thermo_failures(seq, &dconf, false), vec![expected.clone()], "{name}");
+            assert_eq!(
+                thermo_failures(seq, &dconf, true),
+                vec![expected.clone()],
+                "{name}"
+            );
+            assert_eq!(
+                thermo_failures(seq, &dconf, false),
+                vec![expected.clone()],
+                "{name}"
+            );
             assert_eq!(thermo_check(seq, &dconf), expected, "{name}");
         }
         // Nothing fails under the permissive config
@@ -1325,7 +1434,10 @@ mod tests {
             ThermoResult::Hairpin,
         ];
         assert_eq!(thermo_failures(seq, &dconf, true), all);
-        assert_eq!(thermo_failures(seq, &dconf, false), vec![ThermoResult::HighGC]);
+        assert_eq!(
+            thermo_failures(seq, &dconf, false),
+            vec![ThermoResult::HighGC]
+        );
         assert_eq!(thermo_check(seq, &dconf), ThermoResult::HighGC);
     }
 
@@ -1339,15 +1451,24 @@ mod tests {
         // Normal: first failure only, no failure list
         let mut dk = DigestionKmers::new(Some(seq.clone()), None, 1.0);
         dk._thermo_check(&dconf);
-        assert_eq!(dk.status, Some(IndexResult::ThermoResult(ThermoResult::HighGC)));
+        assert_eq!(
+            dk.status,
+            Some(IndexResult::ThermoResult(ThermoResult::HighGC))
+        );
         assert!(dk.failures.is_empty());
 
         // return_all: status is the first failure, failures has them all
         dconf.return_all = true;
         let mut dk = DigestionKmers::new(Some(seq.clone()), None, 1.0);
         dk._thermo_check(&dconf);
-        assert_eq!(dk.status, Some(IndexResult::ThermoResult(ThermoResult::HighGC)));
-        assert_eq!(dk.failures, vec![ThermoResult::HighGC, ThermoResult::Hairpin]);
+        assert_eq!(
+            dk.status,
+            Some(IndexResult::ThermoResult(ThermoResult::HighGC))
+        );
+        assert_eq!(
+            dk.failures,
+            vec![ThermoResult::HighGC, ThermoResult::Hairpin]
+        );
 
         // A passing sequence
         let mut dk = DigestionKmers::new(Some(seq.clone()), None, 1.0);
@@ -1366,7 +1487,10 @@ mod tests {
         // No sequence
         let mut dk = DigestionKmers::new(None, None, 1.0);
         dk._thermo_check(&dconf);
-        assert_eq!(dk.status, Some(IndexResult::DigestError(DigestError::NoValidPrimer)));
+        assert_eq!(
+            dk.status,
+            Some(IndexResult::DigestError(DigestError::NoValidPrimer))
+        );
     }
 
     #[test]
@@ -1393,7 +1517,13 @@ mod tests {
         }
     }
 
-    fn dk(seq: Option<&[u8]>, status: Option<IndexResult>, count: f64, failures: Vec<ThermoResult>, low_freq: bool) -> DigestionKmers {
+    fn dk(
+        seq: Option<&[u8]>,
+        status: Option<IndexResult>,
+        count: f64,
+        failures: Vec<ThermoResult>,
+        low_freq: bool,
+    ) -> DigestionKmers {
         let mut d = DigestionKmers::new(seq.map(|s| s.to_vec()), status, count);
         d.failures = failures;
         d.low_freq = low_freq;
@@ -1406,10 +1536,27 @@ mod tests {
         dconf.return_all = true;
         let err = |e| Some(IndexResult::DigestError(e));
         let dks = vec![
-            dk(Some(b"ACGTACGATCGATGCATGCA"), Some(IndexResult::Pass()), 5.0, vec![], false),
-            dk(Some(b"CCCCCATCCGATCAGGGGG"), Some(IndexResult::ThermoResult(ThermoResult::HighGC)), 3.0,
-               vec![ThermoResult::HighGC, ThermoResult::Hairpin], false),
-            dk(Some(b"ACGTACGATCGATGCATGCT"), Some(IndexResult::Pass()), 1.0, vec![], true),
+            dk(
+                Some(b"ACGTACGATCGATGCATGCA"),
+                Some(IndexResult::Pass()),
+                5.0,
+                vec![],
+                false,
+            ),
+            dk(
+                Some(b"CCCCCATCCGATCAGGGGG"),
+                Some(IndexResult::ThermoResult(ThermoResult::HighGC)),
+                3.0,
+                vec![ThermoResult::HighGC, ThermoResult::Hairpin],
+                false,
+            ),
+            dk(
+                Some(b"ACGTACGATCGATGCATGCT"),
+                Some(IndexResult::Pass()),
+                1.0,
+                vec![],
+                true,
+            ),
             dk(None, err(DigestError::EndOfSequence), 1.0, vec![], false), // skipped, as normal
             dk(None, err(DigestError::WalkedOutLeft), 2.0, vec![], false),
             dk(None, err(DigestError::ContainsN), 1.0, vec![], true),
@@ -1419,7 +1566,11 @@ mod tests {
         assert_eq!(report.counts, vec![5.0, 3.0, 1.0]);
         assert_eq!(
             report.statuses,
-            vec![vec![], vec!["HighGC".to_string(), "Hairpin".to_string()], vec!["LowFreq".to_string()]]
+            vec![
+                vec![],
+                vec!["HighGC".to_string(), "Hairpin".to_string()],
+                vec!["LowFreq".to_string()]
+            ]
         );
         assert_eq!(
             report.errors,
@@ -1435,7 +1586,13 @@ mod tests {
         dconf.ignore_n = true;
         let report = report_all(
             vec![
-                dk(Some(b"GTAAAACGACGGCCAGTGAAT"), Some(IndexResult::Pass()), 3.0, vec![], false),
+                dk(
+                    Some(b"GTAAAACGACGGCCAGTGAAT"),
+                    Some(IndexResult::Pass()),
+                    3.0,
+                    vec![],
+                    false,
+                ),
                 dk(None, err(DigestError::ContainsN), 1.0, vec![], false),
                 dk(None, err(DigestError::ContainsN), 0.5, vec![], true),
             ],
@@ -1446,14 +1603,27 @@ mod tests {
             report.errors,
             vec![
                 (vec!["ContainsN".to_string(), "Ignored".to_string()], 1.0),
-                (vec!["ContainsN".to_string(), "Ignored".to_string(), "LowFreq".to_string()], 0.5),
+                (
+                    vec![
+                        "ContainsN".to_string(),
+                        "Ignored".to_string(),
+                        "LowFreq".to_string()
+                    ],
+                    0.5
+                ),
             ]
         );
         assert!(FKmer::from_report(report, 10).passed());
 
         // Only ignored Ns: no sequence, so NoValidPrimer, as a normal digest
-        let only_n = report_all(vec![dk(None, err(DigestError::ContainsN), 1.0, vec![], false)], &dconf);
-        assert_eq!(only_n.err(), Some(IndexResult::DigestError(DigestError::NoValidPrimer)));
+        let only_n = report_all(
+            vec![dk(None, err(DigestError::ContainsN), 1.0, vec![], false)],
+            &dconf,
+        );
+        assert_eq!(
+            only_n.err(),
+            Some(IndexResult::DigestError(DigestError::NoValidPrimer))
+        );
 
         // No sequence at all: the first error, as a normal digest reports
         let none = report_all(
@@ -1464,7 +1634,10 @@ mod tests {
             ],
             &dconf,
         );
-        assert_eq!(none.err(), Some(IndexResult::DigestError(DigestError::MaxWalk)));
+        assert_eq!(
+            none.err(),
+            Some(IndexResult::DigestError(DigestError::MaxWalk))
+        );
         assert_eq!(
             report_all(vec![], &dconf).err(),
             Some(IndexResult::DigestError(DigestError::NoValidPrimer))
@@ -1528,7 +1701,7 @@ mod tests {
             );
         }
 
-        assert_eq!(digested.contains_key(&exp_seq), true);
+        assert!(digested.contains_key(&exp_seq));
         // Check count
         assert_eq!(digested.get(&exp_seq).unwrap(), &1.0);
     }
@@ -1542,7 +1715,7 @@ mod tests {
         let digested = digest_r_at_index(&seqs, 25, &dconf);
         println!("{:?}", digested);
         // Check num of seqs
-        assert_eq!(digested.is_ok(), true);
+        assert!(digested.is_ok());
 
         // Check index
         let rkmer = digested.unwrap();
@@ -1572,7 +1745,7 @@ mod tests {
         for (_key, count) in digested.iter() {
             assert_eq!(count, &(1.0 / 3.0), "Count: {}", count);
         }
-        for seq in digested.keys().into_iter() {
+        for seq in digested.keys() {
             println!("{:?}", str::from_utf8(seq.as_ref().unwrap()))
         }
         // Check Sequence
@@ -1599,7 +1772,7 @@ mod tests {
             assert_eq!(count, &0.25, "Count: {}", count);
         }
 
-        for seq in digested.keys().into_iter() {
+        for seq in digested.keys() {
             println!("{:?}", str::from_utf8(seq.as_ref().unwrap()))
         }
         // Check Sequence
@@ -1627,7 +1800,7 @@ mod tests {
         let exp_seq: Result<Vec<u8>, DigestError> =
             Ok("TTCCCAGGTAACAAACCAACCAAC".as_bytes().to_vec());
 
-        assert_eq!(digested.contains_key(&exp_seq), true);
+        assert!(digested.contains_key(&exp_seq));
         // Check count
         assert_eq!(digested.get(&exp_seq).unwrap(), &1.0);
     }
@@ -1645,7 +1818,7 @@ mod tests {
         // Check sequence
         let exp_seq = Ok("GTCCAATGGTGCAAAAGGTATAATCATTAAT".as_bytes().to_vec());
 
-        assert_eq!(digested.contains_key(&exp_seq), true);
+        assert!(digested.contains_key(&exp_seq));
         // Check count
         assert_eq!(digested.get(&exp_seq).unwrap(), &1.0);
     }
@@ -1659,7 +1832,7 @@ mod tests {
         // Check num of seqs
         assert_eq!(digested.len(), 1);
         // Check sequence
-        assert_eq!(digested.contains_key(&Err(DigestError::GapOnSetBase)), true);
+        assert!(digested.contains_key(&Err(DigestError::GapOnSetBase)));
     }
 
     #[test]
@@ -1710,7 +1883,7 @@ mod tests {
         for (_key, count) in digested.iter() {
             assert_eq!(*count, 1.0 / digested.len() as f64, "Count: {}", count);
         }
-        for seq in digested.keys().into_iter() {
+        for seq in digested.keys() {
             println!("{:?}", str::from_utf8(seq.as_ref().unwrap()))
         }
         // Check Sequence
@@ -1736,10 +1909,7 @@ mod tests {
         // Check num of seqs
         assert_eq!(digested.len(), 1);
         // Check sequence
-        assert_eq!(
-            digested.contains_key(&Err(DigestError::WalkedOutLeft)),
-            true
-        );
+        assert!(digested.contains_key(&Err(DigestError::WalkedOutLeft)));
     }
 
     #[test]
@@ -1752,22 +1922,33 @@ mod tests {
         // Check num of seqs
         assert_eq!(digested.len(), 1);
         // Check sequence
-        assert_eq!(digested.contains_key(&Err(DigestError::ContainsN)), true);
+        assert!(digested.contains_key(&Err(DigestError::ContainsN)));
     }
     #[test]
     fn test_lowercase_n_same_as_uppercase() {
         // Every index, both directions, both the kmer check and the walk:
         // a raw lower-case n must behave exactly like N.
         let upper = b"ATTAAAGGTTTATACCTTCCCAGGTAACAAACCAACCAANTTTCGATCTCTTGTAGATCTGTTCTCTAAACGAACTTTAAAATCTGTGTGGCTGTCACTCGGCTGCATGCTTAGTGCACTCACGCAGTATAATTAATAACTAATTACTGTCGTTGACAGGACACGAGTAACTCGTCTATCTTCTGCAGGCTGCTTACGGTTTCGTCCGTGTTGCAGCCGATCATCAGCACATCTAGGTTTCGTCCGGGTGTGACCGAAAGGTAAGATGGAGAGCCTTGTCCCTGGTTTCAACGAGAAAACACACGTCCAACTCAGTTTGCCTGTTTTACAGGTTCGCGACGTGCTCGTACGTGGCTTTGGAGACTCCGTGGAGGAGGTCTTATCAGAGGCACGTCAACATCTTAAAGATGGCACTTGTGGCTTAGTAGAAGTTGAAAAAGGCGTTTTGCCTCAACTTGAACAGCCCTATGTGTTCATCAAACGTTCGGATGCTCGAACTGCACCTCATGGTCATGTTATGGTTGAGCTGGTAGCAGAACTCGAAGGCATTCAGTACGGTCGTAGTGGTGAGACACTTGGTGTCCTTGTCCCTCATGTGGGCGAAATACCAGTGGCTTACCGCAAGGTTCTTCTTCGTAAGAACGGTAATAAAGGAGCTGGTGGCCATAGTTACGGCGCCGATCTAAAGTCATTTGACTTAGGCGACGAGCTTGGCACTGATCCTTATGAAGATTTTCAAGAAAACTGGAACACTAAACATAGCAGTGGTGTTACCCGTGAACTCATGCGTGAGCTTAACGGAGGGGCATACACTCGCTATGTCGATAACAACTTCTGTGGCCCTGATGGCTACCCTCTTGAGTGCATTAAAGACCTTCTAGCACGTGCTGGTAAAGCTTCATGCACTTTGTCCGAACAACTGGACTTTATTGACACTAAGAGGGGTGTATACTGCTGCCGTGAACATGAGCATGAAATTGCTTGGTACACGGAACGTTCTGAAAAGAGCTATGAATTGCAGACACCTTTTGAAATTAAATTGGCAAAGAAATTTGACACCTTCAATGGGGAATGTCCAAATTTTGTATTTCCCTTAAATTCCATAATCAAGACTATTCAACCAAGGGTTGAAAAGAAAAAGCTTGATGGCTTTATGGGTAGAATTCGATCTGTCTATCCAGTTGCGTCACCAAATGAATGCAACCAAATGTGCCTTTCAACTCTCATGAAGTGTGATCATTGTGGTGAAACTTCATGGCAGACGGGCGATTTTGTTAAAGCCACTTGCGAATTTTGTGGCACTGAGAATTTGACTAAAGAAGGTGCCACTACTTGTGGTTACTTACCCCAAAATGCTGTTGTTAAAATTTATTGTCCAGCATGTCACAATTCAGAAGTAGGACCTGAGCATAGTCTTGCCGAATACCATAATGAATCTGGCTTGAAAACCATTCTTCGTAAGGGTGGTCGCACTATTGCCTTTGGAGGCTGTGTGTTCTCTTATGTTGGTTGCCATAACAAGTGTGCCTATTGGGTTCCACGTGCTAGCGCTAACATAGGTTGTAACCATACAGGTGTTGTTGGAGAAGGTTCCGAAGGTCTTAATGACAACCTTCTTGAAATACTCCAAAAAGAGAAAGTCAACATCAATATTGTTGGTGACTTTAAACTTAATGAAGAGATCGCCATTATTTTGGCATCTTTTTCTGCTTCCACAAGTGCTTTTGTGGAAACTGTGAAAGGTTTGGATTATAAAGCATTCAAACAAATTGTTGAATCCTGCGGTAATTTTAAAGTTACAAAAGGAAAAGCTAAAAAAGGTGCCTGGAATATTGGTGAACAGAAATCAATACTGAGTCCTCTTTATGCATTTGCATCAGAGGCTGCTCGTGTTGTACGATCAATTTTCTCCCGCACTCTTGAAACTGCTCAAAATTCTGTGCGTGTTTTACAGAAGGCCGCTATAACAATACTAGATGGAATTTCACAGTATTCACTGAGACTCATTGATGCTATGATGTTCACATCTGATTTGGCTACTAACAATCTAGTTGTAATGGCCTACATTACAGGTGGTGTTGTTCAGTTGACTTCGCAGTGGCTAACTAACATCTTTGGCACTGTTTATGAAAAACTCAAACCCGTCCTTGATTGGCTTGAAGAGAAGTTTAAGGAAGGTGTAGAGTTTCTTAGAGACGGTTGGGAAATTGTTAAATTTATCTCAACCTGTGCTTGTGAAATTGTCGGTGGACAAATTGTCACCTGTGCAAAGGAAATTAAGGAGAGTGTTCAGACATTCTTTAAGCTTGTAAATAAATTTTTGGCTTTGTGTGCTGACTCTATCATTATTGGTGGAGCTAAACTTAAAGCCTTGAATTTAGGTGAAACATTTGTCACGCACTCAAAGGGATTGTACAGAAAGTGTGTTAAATCCAGAGAAGAAACTGGCCTACTCATGCCTCTAAAAGCCCCAAAAGAAATTATCTTCTTAGAGGGAGAAACACTTCCCACAGAAGTGTTAACAGAGGAAGTTGTCTTGAAAACTGGTGATTTACAACCATTAGAACAACCTACTAGTGAAGCTGTTGAAGCTCCATTGGTTGGTACACCAGTTTGTATTAACGGGCTTATGTTGCTCGAAATCAAAGACACAGAAAAGTACTGTGCCCTTGCACCTAATATGATGGTAACAAACAATACCTTCACACTCAAAGGCGG";
-        let lower: Vec<u8> = upper.iter().map(|&b| if b == b'N' { b'n' } else { b }).collect();
+        let lower: Vec<u8> = upper
+            .iter()
+            .map(|&b| if b == b'N' { b'n' } else { b })
+            .collect();
         let dconf = DigestConfig::create_default();
         let (u, l): (Vec<&[u8]>, Vec<&[u8]>) = (vec![&upper[..]], vec![&lower[..]]);
         let mut n_hits = 0;
         for index in 0..=upper.len() {
             let fu = digest_f_to_count(&u, index, &dconf);
-            assert_eq!(fu, digest_f_to_count(&l, index, &dconf), "forward index {index}");
+            assert_eq!(
+                fu,
+                digest_f_to_count(&l, index, &dconf),
+                "forward index {index}"
+            );
             let ru = digest_r_to_count(&u, index, &dconf);
-            assert_eq!(ru, digest_r_to_count(&l, index, &dconf), "reverse index {index}");
+            assert_eq!(
+                ru,
+                digest_r_to_count(&l, index, &dconf),
+                "reverse index {index}"
+            );
             n_hits += fu.contains_key(&Err(DigestError::ContainsN)) as usize
                 + ru.contains_key(&Err(DigestError::ContainsN)) as usize;
         }
@@ -1783,7 +1964,7 @@ mod tests {
         // Check num of seqs
         assert_eq!(digested.len(), 1);
         // Check sequence
-        assert_eq!(digested.contains_key(&Err(DigestError::InvalidBase)), true);
+        assert!(digested.contains_key(&Err(DigestError::InvalidBase)));
     }
 
     #[test]
@@ -1888,14 +2069,14 @@ mod tests {
         // Opto the sequences
         let processed_map = opto_binding(count_map.clone(), &dconf);
 
-        for seq in processed_map.keys().into_iter() {
+        for seq in processed_map.keys() {
             println!("{:?}", str::from_utf8(seq.as_ref().unwrap()))
         }
 
         // Check wanted seqs are present
         let wanted_seqs = vec!["GGTTGTGATGGTGGCAGTTTGTA".as_bytes().to_vec()];
         for wseq in wanted_seqs.into_iter() {
-            assert_eq!(processed_map.contains_key(&Ok(wseq.clone())), true);
+            assert!(processed_map.contains_key(&Ok(wseq.clone())));
             assert_eq!(processed_map.get(&Ok(wseq)), Some(&2.0));
         }
     }
@@ -1926,12 +2107,12 @@ mod tests {
         // Opto the sequences
         let processed_map = opto_binding(count_map.clone(), &dconf);
 
-        for seq in processed_map.keys().into_iter() {
+        for seq in processed_map.keys() {
             println!("{:?}", str::from_utf8(seq.as_ref().unwrap()))
         }
         // Check wanted seqs are present
         for wseq in wanted_seqs.into_iter() {
-            assert_eq!(processed_map.contains_key(&Ok(wseq.clone())), true);
+            assert!(processed_map.contains_key(&Ok(wseq.clone())));
 
             assert_eq!(processed_map.get(&Ok(wseq)), Some(&1.0));
         }
@@ -1956,7 +2137,7 @@ mod tests {
         let wanted_seqs = vec!["GGTTGTGATGGTGGCAGTTTGTA".as_bytes().to_vec()];
         assert_eq!(count_map.len(), 1);
         for wseq in wanted_seqs.into_iter() {
-            assert_eq!(count_map.contains_key(&Ok(wseq.clone())), true);
+            assert!(count_map.contains_key(&Ok(wseq.clone())));
             assert_eq!(count_map.get(&Ok(wseq)), Some(&2.0));
         }
     }

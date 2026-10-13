@@ -51,6 +51,7 @@ pub struct DigestConfig {
 }
 
 impl DigestConfig {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         primer_len_min: Option<usize>,
         primer_len_max: Option<usize>,
@@ -85,7 +86,7 @@ impl DigestConfig {
             primer_tm_max: primer_tm_max.unwrap_or(62.5),
             primer_tm_min: primer_tm_min.unwrap_or(59.5),
             // Annealing
-            primer_annealing_prop: primer_annealing_prop,
+            primer_annealing_prop,
             annealing_temp_c: annealing_temp_c.unwrap_or(65.0),
             annealing_diff: annealing_diff.unwrap_or(10.0),
             // Thermo

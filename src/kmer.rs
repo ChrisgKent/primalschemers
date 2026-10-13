@@ -44,7 +44,11 @@ impl Statuses {
         let kept = |tags: &Vec<String>| !tags.iter().any(|t| t == LOW_FREQ || t == IGNORED);
         self.kmer.is_empty()
             && self.per_seq.iter().any(kept)
-            && self.per_seq.iter().filter(|t| kept(t)).all(|t| t.is_empty())
+            && self
+                .per_seq
+                .iter()
+                .filter(|t| kept(t))
+                .all(|t| t.is_empty())
             && self.errors.iter().filter(|(t, _)| kept(t)).count() == 0
     }
 }
@@ -132,8 +136,7 @@ impl FKmer {
                     panic!("Different number of seqs and counts")
                 }
                 // Create pairs of (seq, count), sort by seq, then separate
-                let mut pairs: Vec<(Vec<u8>, f64)> =
-                    seqs.into_iter().zip(counts_vec.into_iter()).collect();
+                let mut pairs: Vec<(Vec<u8>, f64)> = seqs.into_iter().zip(counts_vec).collect();
                 pairs.sort_by(|a, b| a.0.cmp(&b.0));
 
                 // Remove duplicates while preserving counts (sum counts for duplicates)
@@ -160,7 +163,7 @@ impl FKmer {
         };
         FKmer {
             seqs: sorted_seqs,
-            end: end,
+            end,
             counts: sorted_counts,
             statuses: None,
         }
@@ -195,10 +198,7 @@ impl FKmer {
         // Returns the start positions of the sequences.
         self.seqs
             .iter()
-            .map(|s| match self.end.checked_sub(s.len()) {
-                Some(s) => s,
-                None => 0,
-            })
+            .map(|s| self.end.checked_sub(s.len()).unwrap_or_default())
             .collect()
     }
     #[getter]
@@ -231,25 +231,18 @@ impl FKmer {
     pub fn to_bed(&self, chrom: String, amplicon_prefix: String, pool: usize) -> String {
         let mut string = String::new();
         for (index, seq) in self.seqs().iter().enumerate() {
-            let start_pos = match self.end.checked_sub(seq.len()) {
-                Some(pos) => pos,
-                None => 0,
-            };
+            let start_pos = self.end.checked_sub(seq.len()).unwrap_or_default();
             let seq_count = self.counts.as_ref().and_then(|c| c.get(index));
-            let attr_str: String;
-
-            match seq_count {
-                Some(c) => {
-                    attr_str = format!("\tpc={}", c);
-                }
-                None => attr_str = "".to_string(),
-            }
+            let attr_str = match seq_count {
+                Some(c) => format!("\tpc={}", c),
+                None => String::new(),
+            };
             string.push_str(&format!(
                 "{}\t{}\t{}\t{}\t{}\t{}\t{}{}\n",
                 chrom,
                 start_pos,
                 self.end,
-                format!("{}_LEFT_{}", amplicon_prefix, index + 1), // +1 for 1-based indexing of primer_number
+                format_args!("{}_LEFT_{}", amplicon_prefix, index + 1), // +1 for 1-based indexing of primer_number
                 pool,
                 "+",
                 seq,
@@ -284,21 +277,30 @@ impl FKmer {
 
     /// Failures of the kmer as a whole (e.g. `PrimerDimer`).
     pub fn kmer_statuses(&self) -> Vec<String> {
-        self.statuses.as_ref().map(|s| s.kmer.clone()).unwrap_or_default()
+        self.statuses
+            .as_ref()
+            .map(|s| s.kmer.clone())
+            .unwrap_or_default()
     }
 
     /// Alignment positions that produced no sequence: (errors, count).
     /// Errors a normal digest skips are tagged `Ignored` (e.g. `ContainsN`
     /// with `ignore_n`) and don't affect `passed()`.
     pub fn errors(&self) -> Vec<(Vec<String>, f64)> {
-        self.statuses.as_ref().map(|s| s.errors.clone()).unwrap_or_default()
+        self.statuses
+            .as_ref()
+            .map(|s| s.errors.clone())
+            .unwrap_or_default()
     }
 
     /// Sequence pairs that form a primer dimer, as indices into `seqs()`
     /// with `i <= j` (`(i, i)` is a self-dimer). Empty unless digested with
     /// `return_all`; non-empty exactly when `kmer_statuses()` has `PrimerDimer`.
     pub fn dimers(&self) -> Vec<(usize, usize)> {
-        self.statuses.as_ref().map(|s| s.dimers.clone()).unwrap_or_default()
+        self.statuses
+            .as_ref()
+            .map(|s| s.dimers.clone())
+            .unwrap_or_default()
     }
 
     /// Whether a normal digest would keep this kmer. Always true for kmers
@@ -352,8 +354,7 @@ impl RKmer {
                 }
 
                 // Create pairs of (seq, count), sort by seq, then separate
-                let mut pairs: Vec<(Vec<u8>, f64)> =
-                    seqs.into_iter().zip(counts_vec.into_iter()).collect();
+                let mut pairs: Vec<(Vec<u8>, f64)> = seqs.into_iter().zip(counts_vec).collect();
                 pairs.sort_by(|a, b| a.0.cmp(&b.0));
 
                 // Remove duplicates while preserving counts (sum counts for duplicates)
@@ -381,7 +382,7 @@ impl RKmer {
         RKmer {
             seqs: sorted_seqs,
             counts: sorted_counts,
-            start: start,
+            start,
             statuses: None,
         }
     }
@@ -445,21 +446,17 @@ impl RKmer {
         let mut string = String::new();
         for (index, seq) in self.seqs().iter().enumerate() {
             let seq_count = self.counts.as_ref().and_then(|c| c.get(index));
-            let attr_str: String;
-
-            match seq_count {
-                Some(c) => {
-                    attr_str = format!("\tpc={}", c);
-                }
-                None => attr_str = "".to_string(),
-            }
+            let attr_str = match seq_count {
+                Some(c) => format!("\tpc={}", c),
+                None => String::new(),
+            };
 
             string.push_str(&format!(
                 "{}\t{}\t{}\t{}\t{}\t{}\t{}{}\n",
                 chrom,
                 self.start,
                 self.start + seq.len(),
-                format!("{}_RIGHT_{}", amplicon_prefix, index + 1), // +1 for 1-based indexing
+                format_args!("{}_RIGHT_{}", amplicon_prefix, index + 1), // +1 for 1-based indexing
                 pool,
                 "-",
                 seq,
@@ -495,21 +492,30 @@ impl RKmer {
 
     /// Failures of the kmer as a whole (e.g. `PrimerDimer`).
     pub fn kmer_statuses(&self) -> Vec<String> {
-        self.statuses.as_ref().map(|s| s.kmer.clone()).unwrap_or_default()
+        self.statuses
+            .as_ref()
+            .map(|s| s.kmer.clone())
+            .unwrap_or_default()
     }
 
     /// Alignment positions that produced no sequence: (errors, count).
     /// Errors a normal digest skips are tagged `Ignored` (e.g. `ContainsN`
     /// with `ignore_n`) and don't affect `passed()`.
     pub fn errors(&self) -> Vec<(Vec<String>, f64)> {
-        self.statuses.as_ref().map(|s| s.errors.clone()).unwrap_or_default()
+        self.statuses
+            .as_ref()
+            .map(|s| s.errors.clone())
+            .unwrap_or_default()
     }
 
     /// Sequence pairs that form a primer dimer, as indices into `seqs()`
     /// with `i <= j` (`(i, i)` is a self-dimer). Empty unless digested with
     /// `return_all`; non-empty exactly when `kmer_statuses()` has `PrimerDimer`.
     pub fn dimers(&self) -> Vec<(usize, usize)> {
-        self.statuses.as_ref().map(|s| s.dimers.clone()).unwrap_or_default()
+        self.statuses
+            .as_ref()
+            .map(|s| s.dimers.clone())
+            .unwrap_or_default()
     }
 
     /// Whether a normal digest would keep this kmer. Always true for kmers
@@ -554,7 +560,7 @@ pub fn generate_primerpairs_py(
         .progress_with(progress_bar)
         .map(|fkmer| {
             let rkmer_window_start = fkmer.borrow(py).end() + amplicon_size_min;
-            let rkmer_window_end = &fkmer.borrow(py).end() + amplicon_size_max;
+            let rkmer_window_end = fkmer.borrow(py).end() + amplicon_size_max;
 
             // Get the start position of the rkmer window
             let pos_rkmer_start = match rkmer_ends.binary_search(&rkmer_window_start) {
@@ -568,8 +574,7 @@ pub fn generate_primerpairs_py(
             };
 
             let mut primer_pairs: Vec<(Py<FKmer>, Py<RKmer>)> = Vec::new();
-            for i in pos_rkmer_start..rkmers.len() {
-                let rkmer = &rkmers[i];
+            for rkmer in &rkmers[pos_rkmer_start..] {
                 if rkmer.borrow(py).start() > rkmer_window_end {
                     break;
                 }
@@ -631,8 +636,7 @@ pub fn generate_primerpairs<'a>(
                 };
 
             let mut primer_pairs: Vec<(&'a FKmer, &'a RKmer)> = Vec::new();
-            for i in pos_rkmer_start..rkmers.len() {
-                let rkmer = &rkmers[i];
+            for rkmer in &rkmers[pos_rkmer_start..] {
                 if rkmer.start() > rkmer_window_end {
                     break;
                 }
@@ -669,7 +673,11 @@ mod tests {
         t.iter().map(|s| s.to_string()).collect()
     }
 
-    fn report(statuses: Vec<Vec<String>>, kmer: Vec<String>, errors: Vec<(Vec<String>, f64)>) -> KmerReport {
+    fn report(
+        statuses: Vec<Vec<String>>,
+        kmer: Vec<String>,
+        errors: Vec<(Vec<String>, f64)>,
+    ) -> KmerReport {
         let n = statuses.len();
         KmerReport {
             seqs: (0..n).map(|i| format!("ACGT{i}").into_bytes()).collect(),
@@ -684,20 +692,80 @@ mod tests {
     #[test]
     fn test_passed_rules() {
         let cases: Vec<(&str, KmerReport, bool)> = vec![
-            ("all clean", report(vec![tags(&[]), tags(&[])], vec![], vec![]), true),
-            ("one failing sequence", report(vec![tags(&[]), tags(&["Hairpin"])], vec![], vec![]), false),
-            ("kmer status", report(vec![tags(&[])], tags(&["PrimerDimer"]), vec![]), false),
-            ("error", report(vec![tags(&[])], vec![], vec![(tags(&["WalkedOutLeft"]), 1.0)]), false),
+            (
+                "all clean",
+                report(vec![tags(&[]), tags(&[])], vec![], vec![]),
+                true,
+            ),
+            (
+                "one failing sequence",
+                report(vec![tags(&[]), tags(&["Hairpin"])], vec![], vec![]),
+                false,
+            ),
+            (
+                "kmer status",
+                report(vec![tags(&[])], tags(&["PrimerDimer"]), vec![]),
+                false,
+            ),
+            (
+                "error",
+                report(
+                    vec![tags(&[])],
+                    vec![],
+                    vec![(tags(&["WalkedOutLeft"]), 1.0)],
+                ),
+                false,
+            ),
             // A normal digest drops low-frequency entries before checking them
-            ("low-freq failing sequence", report(vec![tags(&[]), tags(&["HighGC", "LowFreq"])], vec![], vec![]), true),
-            ("low-freq error", report(vec![tags(&[])], vec![], vec![(tags(&["ContainsN", "LowFreq"]), 1.0)]), true),
-            ("ignored error", report(vec![tags(&[])], vec![], vec![(tags(&["ContainsN", "Ignored"]), 1.0)]), true),
-            ("ignored error alone", report(vec![tags(&["LowFreq"])], vec![], vec![(tags(&["ContainsN", "Ignored"]), 1.0)]), false),
-            ("only low-freq sequences", report(vec![tags(&["LowFreq"])], vec![], vec![]), false),
+            (
+                "low-freq failing sequence",
+                report(
+                    vec![tags(&[]), tags(&["HighGC", "LowFreq"])],
+                    vec![],
+                    vec![],
+                ),
+                true,
+            ),
+            (
+                "low-freq error",
+                report(
+                    vec![tags(&[])],
+                    vec![],
+                    vec![(tags(&["ContainsN", "LowFreq"]), 1.0)],
+                ),
+                true,
+            ),
+            (
+                "ignored error",
+                report(
+                    vec![tags(&[])],
+                    vec![],
+                    vec![(tags(&["ContainsN", "Ignored"]), 1.0)],
+                ),
+                true,
+            ),
+            (
+                "ignored error alone",
+                report(
+                    vec![tags(&["LowFreq"])],
+                    vec![],
+                    vec![(tags(&["ContainsN", "Ignored"]), 1.0)],
+                ),
+                false,
+            ),
+            (
+                "only low-freq sequences",
+                report(vec![tags(&["LowFreq"])], vec![], vec![]),
+                false,
+            ),
             ("no sequences", report(vec![], vec![], vec![]), false),
         ];
         for (name, r, expected) in cases {
-            assert_eq!(FKmer::from_report(clone_report(&r), 10).passed(), expected, "FKmer {name}");
+            assert_eq!(
+                FKmer::from_report(clone_report(&r), 10).passed(),
+                expected,
+                "FKmer {name}"
+            );
             assert_eq!(RKmer::from_report(r, 10).passed(), expected, "RKmer {name}");
         }
     }

@@ -285,7 +285,10 @@ pub fn calc_hairpin_batch(
     );
     py.detach(|| primer3_thal_rs::calc_hairpin_batch(&seqs, &args, output_structure))
         .into_iter()
-        .map(|r| r.map(|res| PyThermoResult::new(res, output_structure)).map_err(to_py_err))
+        .map(|r| {
+            r.map(|res| PyThermoResult::new(res, output_structure))
+                .map_err(to_py_err)
+        })
         .collect()
 }
 
@@ -326,7 +329,10 @@ pub fn calc_heterodimer_batch(
     );
     py.detach(|| primer3_thal_rs::calc_heterodimer_batch(&pairs, &args, output_structure))
         .into_iter()
-        .map(|r| r.map(|res| PyThermoResult::new(res, output_structure)).map_err(to_py_err))
+        .map(|r| {
+            r.map(|res| PyThermoResult::new(res, output_structure))
+                .map_err(to_py_err)
+        })
         .collect()
 }
 

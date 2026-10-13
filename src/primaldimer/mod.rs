@@ -58,7 +58,7 @@ pub fn calc_core_region(seq1: &[u8], seq2: &[u8], i: usize, j: usize) -> f64 {
         dg_score += BONUS_ARRAY[2];
     }
 
-    return dg_score;
+    dg_score
 }
 
 // base_to_encode = {"A": 0, "T": 3, "C": 1, "G": 2}
@@ -74,7 +74,7 @@ pub fn encode_base(sequence: &str) -> Vec<usize> {
             _ => panic!("NON STANDRD BASE found in {}", sequence),
         })
         .collect();
-    return encoded_base;
+    encoded_base
 }
 
 pub fn decode_base(encoded_base: &[usize]) -> String {
@@ -89,7 +89,7 @@ pub fn decode_base(encoded_base: &[usize]) -> String {
         })
         .collect::<Vec<&str>>()
         .join("");
-    return decoded_base;
+    decoded_base
 }
 
 fn calc_dangling_ends_stability(
@@ -127,7 +127,7 @@ fn calc_dangling_ends_stability(
         }
     }
 
-    return dg_score;
+    dg_score
 }
 
 fn calc_nn_thermo(seq1: &[u8], seq2: &[u8], start_x: usize, end_x: usize, offset: i32) -> f64 {
@@ -139,7 +139,7 @@ fn calc_nn_thermo(seq1: &[u8], seq2: &[u8], start_x: usize, end_x: usize, offset
             None => dg_score += BONUS_ARRAY[6],
         }
     }
-    return dg_score;
+    dg_score
 }
 
 fn calc_extension(
@@ -180,7 +180,7 @@ fn calc_extension(
         score += 2.;
     }
 
-    return Some(-score);
+    Some(-score)
 }
 
 fn apply_bonus(seq1: &[u8], seq2: &[u8], start_x: usize, end_x: usize, offset: i32) -> f64 {
@@ -194,9 +194,9 @@ fn apply_bonus(seq1: &[u8], seq2: &[u8], start_x: usize, end_x: usize, offset: i
     let mut current_run_count = 0;
     let mut bubble_score = 0.;
 
-    for x in start_x..end_x {
+    for (x, &base1) in seq1.iter().enumerate().take(end_x).skip(start_x) {
         let s2_idx = (x as i32 + offset) as usize;
-        let is_match = scores::match_array(seq1[x], seq2[s2_idx]);
+        let is_match = scores::match_array(base1, seq2[s2_idx]);
 
         // Longest match logic
         if is_match {
@@ -213,26 +213,22 @@ fn apply_bonus(seq1: &[u8], seq2: &[u8], start_x: usize, end_x: usize, offset: i
         if x == start_x {
             current_run_val = is_match;
             current_run_count = 1;
+        } else if is_match == current_run_val {
+            current_run_count += 1;
         } else {
-            if is_match == current_run_val {
-                current_run_count += 1;
-            } else {
-                // Process previous run
-                if !current_run_val && current_run_count > 2 {
-                    bubble_score +=
-                        -((current_run_count as f64 - 2.) * BONUS_ARRAY[0]) * BONUS_ARRAY[9];
-                }
-                // Reset
-                current_run_val = is_match;
-                current_run_count = 1;
+            // Process previous run
+            if !current_run_val && current_run_count > 2 {
+                bubble_score +=
+                    -((current_run_count as f64 - 2.) * BONUS_ARRAY[0]) * BONUS_ARRAY[9];
             }
+            // Reset
+            current_run_val = is_match;
+            current_run_count = 1;
         }
     }
     // Process last run for bubbles
-    if total_len > 0 {
-        if !current_run_val && current_run_count > 2 {
-            bubble_score += -((current_run_count as f64 - 2.) * BONUS_ARRAY[0]) * BONUS_ARRAY[9];
-        }
+    if total_len > 0 && !current_run_val && current_run_count > 2 {
+        bubble_score += -((current_run_count as f64 - 2.) * BONUS_ARRAY[0]) * BONUS_ARRAY[9];
     }
 
     let mut score = 0.;
@@ -248,7 +244,7 @@ fn apply_bonus(seq1: &[u8], seq2: &[u8], start_x: usize, end_x: usize, offset: i
     // Resolve bubbles
     score += bubble_score;
 
-    return score;
+    score
 }
 
 pub fn calc_at_offset(seq1: &[u8], seq2: &[u8], offset: i32) -> Option<f64> {
@@ -311,7 +307,7 @@ pub fn calc_at_offset(seq1: &[u8], seq2: &[u8], offset: i32) -> Option<f64> {
         dg_score += calc_nn_thermo(seq1, seq2, start_x, end_x - 1, offset);
     }
 
-    return Some(dg_score);
+    Some(dg_score)
 }
 
 pub fn does_seq1_extend(seq1: &[u8], seq2: &[u8], t: f64) -> bool {
@@ -319,39 +315,33 @@ pub fn does_seq1_extend(seq1: &[u8], seq2: &[u8], t: f64) -> bool {
     seq2_rev.reverse();
 
     for offset in -(seq1.len() as i32 - 2)..(seq2.len() as i32) - (seq1.len() as i32) {
-        match calc_at_offset(&seq1, &seq2_rev, offset) {
-            Some(score) => {
-                //println!("{}", score);
-                if score <= t {
-                    return true;
-                }
+        if let Some(score) = calc_at_offset(seq1, &seq2_rev, offset) {
+            //println!("{}", score);
+            if score <= t {
+                return true;
             }
-            None => (),
         }
     }
-    return false;
+    false
 }
 
 pub fn does_seq1_extend_no_alloc(seq1: &[u8], seq2_rev: &[u8], t: f64) -> bool {
     for offset in -(seq1.len() as i32 - 2)..(seq2_rev.len() as i32) - (seq1.len() as i32) {
-        match calc_at_offset(&seq1, &seq2_rev, offset) {
-            Some(score) => {
-                //println!("{}", score);
-                if score <= t {
-                    return true;
-                }
+        if let Some(score) = calc_at_offset(seq1, seq2_rev, offset) {
+            //println!("{}", score);
+            if score <= t {
+                return true;
             }
-            None => (),
         }
     }
-    return false;
+    false
 }
 
 pub fn do_seqs_interact(seq1: &str, seq2: &str, t: f64) -> bool {
     let s1 = seq1.as_bytes();
     let s2 = seq2.as_bytes();
 
-    return does_seq1_extend(&s1, &s2, t) | does_seq1_extend(&s2, &s1, t);
+    does_seq1_extend(s1, s2, t) | does_seq1_extend(s2, s1, t)
 }
 
 pub fn do_pools_interact(pool1: Vec<&str>, pool2: Vec<&str>, t: f64) -> bool {
@@ -361,14 +351,14 @@ pub fn do_pools_interact(pool1: Vec<&str>, pool2: Vec<&str>, t: f64) -> bool {
 
     // Will look for interactions between every seq in pool1 and pool2
     for (s1, s2) in pool1_encoded.iter().cartesian_product(pool2_encoded.iter()) {
-        if does_seq1_extend(&s1, &s2, t) | does_seq1_extend(&s2, &s1, t) {
+        if does_seq1_extend(s1, s2, t) | does_seq1_extend(s2, s1, t) {
             return true;
         }
     }
-    return false;
+    false
 }
 
-pub fn do_pool_interact_u8(seqs1: &Vec<Vec<u8>>, seqs2: &Vec<Vec<u8>>, t: f64) -> bool {
+pub fn do_pool_interact_u8(seqs1: &[Vec<u8>], seqs2: &[Vec<u8>], t: f64) -> bool {
     // Create the reverse complement of the sequences
     let mut seqs1_rev: Vec<Vec<u8>> = seqs1.iter().map(|s| s.to_vec()).collect();
     for s in seqs1_rev.iter_mut() {
@@ -427,8 +417,8 @@ pub fn do_pool_interact_u8_slice(seqs1: &Vec<&[u8]>, seqs2: &Vec<&[u8]>, t: f64)
     // Check for interactions
     for seq1i in 0..seqs1.len() {
         for seq2i in 0..seqs2.len() {
-            if does_seq1_extend_no_alloc(&seqs1[seq1i], &seqs2_rev[seq2i], t)
-                || does_seq1_extend_no_alloc(&seqs2[seq2i], &seqs1_rev[seq1i], t)
+            if does_seq1_extend_no_alloc(seqs1[seq1i], &seqs2_rev[seq2i], t)
+                || does_seq1_extend_no_alloc(seqs2[seq2i], &seqs1_rev[seq1i], t)
             {
                 return true;
             }
@@ -444,7 +434,9 @@ mod tests {
     fn test_pool_dimer_pairs_agrees_with_pool_check() {
         let mut state: u64 = 7;
         let mut next = move || {
-            state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            state = state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
             (state >> 33) as usize
         };
         let mut found = 0;
@@ -537,32 +529,32 @@ mod tests {
         assert!(scores::match_array(b'G', b'C'));
         // MISMATCHES
         // A / A
-        assert_eq!(scores::match_array(b'A', b'A'), false);
+        assert!(!scores::match_array(b'A', b'A'));
         // A / C
-        assert_eq!(scores::match_array(b'A', b'C'), false);
+        assert!(!scores::match_array(b'A', b'C'));
         // A / G
-        assert_eq!(scores::match_array(b'A', b'G'), false);
+        assert!(!scores::match_array(b'A', b'G'));
 
         // T / T
-        assert_eq!(scores::match_array(b'T', b'T'), false);
+        assert!(!scores::match_array(b'T', b'T'));
         // T / C
-        assert_eq!(scores::match_array(b'T', b'C'), false);
+        assert!(!scores::match_array(b'T', b'C'));
         // T / G
-        assert_eq!(scores::match_array(b'T', b'G'), false);
+        assert!(!scores::match_array(b'T', b'G'));
 
         // C / C
-        assert_eq!(scores::match_array(b'C', b'C'), false);
+        assert!(!scores::match_array(b'C', b'C'));
         // C / A
-        assert_eq!(scores::match_array(b'C', b'A'), false);
+        assert!(!scores::match_array(b'C', b'A'));
         // C / T
-        assert_eq!(scores::match_array(b'C', b'T'), false);
+        assert!(!scores::match_array(b'C', b'T'));
 
         // G / G
-        assert_eq!(scores::match_array(b'G', b'G'), false);
+        assert!(!scores::match_array(b'G', b'G'));
         // G / A
-        assert_eq!(scores::match_array(b'G', b'A'), false);
+        assert!(!scores::match_array(b'G', b'A'));
         // G / T
-        assert_eq!(scores::match_array(b'G', b'T'), false);
+        assert!(!scores::match_array(b'G', b'T'));
     }
     #[test]
     fn test_ensure_consistant_result() {

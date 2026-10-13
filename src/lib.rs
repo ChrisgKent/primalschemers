@@ -246,7 +246,13 @@ impl Digester {
             Some(thermo_check),
             primer_hairpin_th_max,
             Some(return_all),
-            Some(digest_conditions(mv_conc, dv_conc, dntp_conc, dna_conc, formamide_conc)),
+            Some(digest_conditions(
+                mv_conc,
+                dv_conc,
+                dntp_conc,
+                dna_conc,
+                formamide_conc,
+            )),
         );
         Ok(py.detach(|| {
             self._thread_pool.install(|| {
@@ -349,8 +355,8 @@ fn do_seqs_interact(seq1: &[u8], seq2: &[u8], t: f64) -> bool {
     let mut seq2_rev: Vec<u8> = seq2.to_vec();
     seq2_rev.reverse();
     // Check for interactions
-    if primaldimer::does_seq1_extend_no_alloc(&seq1, &seq2_rev, t)
-        || primaldimer::does_seq1_extend_no_alloc(&seq2, &seq1_rev, t)
+    if primaldimer::does_seq1_extend_no_alloc(seq1, &seq2_rev, t)
+        || primaldimer::does_seq1_extend_no_alloc(seq2, &seq1_rev, t)
     {
         return true;
     }
@@ -390,10 +396,7 @@ fn calc_at_offset_py(seq1: &str, seq2: &str, offset: i32) -> f64 {
     let mut seq2 = seq2.as_bytes().to_vec();
     seq2.reverse();
 
-    match primaldimer::calc_at_offset(&seq1, &seq2, offset) {
-        Some(score) => return score,
-        None => return 100.,
-    };
+    primaldimer::calc_at_offset(&seq1, &seq2, offset).unwrap_or(100.)
 }
 
 /// Percentage of `sequence` bound to its complement at `annealing_temp_c`,

@@ -22,7 +22,7 @@ pub fn complement_base(base: u8) -> u8 {
 }
 
 pub fn reverse_complement(seq: &[u8]) -> Vec<u8> {
-    seq.into_iter().rev().map(|&b| complement_base(b)).collect()
+    seq.iter().rev().map(|&b| complement_base(b)).collect()
 }
 
 pub fn atcg_only(kmer: &[u8]) -> bool {
@@ -114,11 +114,23 @@ pub fn max_homopolymer(kmer: &[u8]) -> usize {
 }
 
 pub fn is_iupac_base(base: &u8) -> bool {
-    match base {
-        b'A' | b'C' | b'G' | b'T' | b'R' | b'Y' | b'S' | b'W' | b'K' | b'M' | b'D' | b'H'
-        | b'V' | b'B' | b'N' => true,
-        _ => false,
-    }
+    matches!(
+        base,
+        b'A' | b'C'
+            | b'G'
+            | b'T'
+            | b'R'
+            | b'Y'
+            | b'S'
+            | b'W'
+            | b'K'
+            | b'M'
+            | b'D'
+            | b'H'
+            | b'V'
+            | b'B'
+            | b'N'
+    )
 }
 
 pub fn is_allowed_base(base: &u8) -> bool {
@@ -155,11 +167,8 @@ pub fn expand_amb_base(amb: u8) -> Option<Vec<u8>> {
 pub fn expand_amb_sequence(seq: &[u8]) -> Option<Vec<Vec<u8>>> {
     let mut expanded: Vec<Vec<u8>> = Vec::new();
     for base in seq.iter() {
-        let new_bases = match expand_amb_base(*base) {
-            Some(bases) => bases,
-            None => return None,
-        };
-        if expanded.len() == 0 {
+        let new_bases = expand_amb_base(*base)?;
+        if expanded.is_empty() {
             for b in new_bases.iter() {
                 expanded.push(vec![*b]);
             }
@@ -180,7 +189,7 @@ pub fn expand_amb_sequence(seq: &[u8]) -> Option<Vec<Vec<u8>>> {
 
 pub fn gc_content(kmer: &[u8]) -> f64 {
     // handle empty string
-    if kmer.len() == 0 {
+    if kmer.is_empty() {
         return 0.0;
     }
     kmer.iter().filter(|&b| b == &b'G' || b == &b'C').count() as f64 / kmer.len() as f64
@@ -280,17 +289,17 @@ mod tests {
 
     #[test]
     fn test_contains_allowed_bases() {
-        assert_eq!(contains_allowed_bases(b"ATCG"), true);
+        assert!(contains_allowed_bases(b"ATCG"));
 
-        assert_eq!(contains_allowed_bases(b"ATCGN"), true);
+        assert!(contains_allowed_bases(b"ATCGN"));
 
-        assert_eq!(contains_allowed_bases(b"ATCGX"), false);
+        assert!(!contains_allowed_bases(b"ATCGX"));
 
-        assert_eq!(contains_allowed_bases(b"ATCG-"), true);
+        assert!(contains_allowed_bases(b"ATCG-"));
 
-        assert_eq!(contains_allowed_bases(b"ATCGH"), true);
+        assert!(contains_allowed_bases(b"ATCGH"));
 
-        assert_eq!(contains_allowed_bases(b"ATCG."), false);
+        assert!(!contains_allowed_bases(b"ATCG."));
     }
 
     #[test]
