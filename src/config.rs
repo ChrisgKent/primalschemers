@@ -1,3 +1,19 @@
+use primer3_thal_rs::ThalArgs;
+
+/// primalscheme3's default reaction conditions for the digest: 100 mM
+/// monovalent, 2 mM divalent, 0.8 mM dNTP, 15 nM DNA and 0.8 M formamide
+/// (as the digest has always used for Tm), at 37 °C with `max_loop` 30.
+pub fn conditions() -> ThalArgs {
+    ThalArgs {
+        mv: 100.0,
+        dv: 2.0,
+        dntp: 0.8,
+        dna_conc: 15.0,
+        formamide_conc: 0.8,
+        ..ThalArgs::default()
+    }
+}
+
 pub enum ThermoType {
     TM,
     ANNEALING,
@@ -30,9 +46,12 @@ pub struct DigestConfig {
     pub primer_hairpin_th_max: f64,
     // Return every kmer with per-sequence statuses instead of only passing kmers
     pub return_all: bool,
+    /// Reaction conditions for primer Tm and annealing.
+    pub thal: ThalArgs,
 }
 
 impl DigestConfig {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         primer_len_min: Option<usize>,
         primer_len_max: Option<usize>,
@@ -56,6 +75,7 @@ impl DigestConfig {
         thermo_check: Option<bool>,
         primer_hairpin_th_max: Option<f64>,
         return_all: Option<bool>,
+        thal: Option<ThalArgs>,
     ) -> DigestConfig {
         DigestConfig {
             primer_len_min: primer_len_min.unwrap_or(19),
@@ -66,7 +86,7 @@ impl DigestConfig {
             primer_tm_max: primer_tm_max.unwrap_or(62.5),
             primer_tm_min: primer_tm_min.unwrap_or(59.5),
             // Annealing
-            primer_annealing_prop: primer_annealing_prop,
+            primer_annealing_prop,
             annealing_temp_c: annealing_temp_c.unwrap_or(65.0),
             annealing_diff: annealing_diff.unwrap_or(10.0),
             // Thermo
@@ -80,12 +100,23 @@ impl DigestConfig {
             thermo_check: thermo_check.unwrap_or(true),
             primer_hairpin_th_max: primer_hairpin_th_max.unwrap_or(55.0),
             return_all: return_all.unwrap_or(false),
+            thal: thal.unwrap_or_else(conditions),
+        }
+    }
+    /// Conditions for the hairpin check: [`DigestConfig::thal`] without
+    /// DMSO or formamide, as primer3's `calc_hairpin` (and so
+    /// primalscheme3's hairpin check), which has no such correction.
+    pub fn hairpin_thal(&self) -> ThalArgs {
+        ThalArgs {
+            dmso_conc: 0.0,
+            formamide_conc: 0.0,
+            ..self.thal
         }
     }
     pub fn create_default() -> DigestConfig {
         DigestConfig::new(
             None, None, None, None, None, None, None, None, None, None, None, None, None, None,
-            None, None, None, None,
+            None, None, None, None, None,
         )
     }
 }

@@ -1,758 +1,281 @@
-static SANTA_LUCIA_2004_DH: [[i32; 5]; 5] = [
-    [76, 84, 78, 72, 72],  // AA, AC, AG, AT, AN
-    [85, 80, 106, 78, 78], // CA, CC, CG, CT, CN
-    [82, 98, 80, 84, 80],  // GA, GC, GG, GT, GN
-    [72, 82, 85, 76, 72],  // TA, TC, TG, TT, TN
-    [72, 80, 78, 72, 72],  // NA, NC, NG, NT, NN
-];
-// dS *-0.1 cal/k*mol
-static SANTA_LUCIA_2004_DS: [[i32; 5]; 5] = [
-    [213, 224, 210, 204, 224], // AA, AC, AG, AT, AN
-    [227, 199, 272, 210, 272], // CA, CC, CG, CT, CN
-    [222, 244, 199, 224, 244], // GA, GC, GG, GT, GN
-    [213, 222, 227, 213, 227], // TA, TC, TG, TT, TN
-    [168, 210, 220, 215, 220], // NA, NC, NG, NT, NN
-];
+//! Primer Tm and annealing on thal's nearest-neighbour model
+//! ([`primer3_thal_rs::nn`]), so they agree with the hairpin and dimer
+//! checks: an oligo's Tm equals thal's for the oligo paired with its
+//! reverse complement.
 
-static SANTA_LUCIA_1998_DH: [[i32; 5]; 5] = [
-    [79, 84, 78, 72, 72],  /* AA, AC, AG, AT, AN; */
-    [85, 80, 106, 78, 78], /* CA, CC, CG, CT, CN; */
-    [82, 98, 80, 84, 80],  /* GA, GC, GG, GT, GN; */
-    [72, 82, 85, 79, 72],  /* TA, TC, TG, TT, TN; */
-    [72, 80, 78, 72, 72],
-]; /* NA, NC, NG, NT, NN; */
+use primer3_thal_rs::nn::{self, Duplex};
+use primer3_thal_rs::{ThalArgs, ThalError};
 
-/* dS *-0.1 cal/k*mol */
-static SANTA_LUCIA_1998_DS: [[i32; 5]; 5] = [
-    [222, 224, 210, 204, 224], /* AA, AC, AG, AT, AN; */
-    [227, 199, 272, 210, 272], /* CA, CC, CG, CT, CN; */
-    [222, 244, 199, 224, 244], /* GA, GC, GG, GT, GN; */
-    [213, 222, 227, 222, 227], /* TA, TC, TG, TT, TN; */
-    [168, 210, 220, 215, 220],
-]; /* NA, NC, NG, NT, NN; */
-
-// dG *-0.001 cal/mol
-// static SANTA_LUCIA_1998_DG: [[i32; 5]; 5] = [
-//     [1000, 1440, 1280, 880, 880],   // AA, AC, AG, AT, AN
-//     [1450, 1840, 2170, 1280, 1450], // CA, CC, CG, CT, CN
-//     [1300, 2240, 1840, 1440, 1300], // GA, GC, GG, GT, GN
-//     [580, 1300, 1450, 1000, 580],   // TA, TC, TG, TT, TN
-//     [580, 1300, 1280, 880, 580],    // NA, NC, NG, NT, NN
-// ];
-
-#[allow(dead_code)]
-fn santa_lucia_1998_ds(nn: &[u8; 2]) -> i32 {
-    match nn[0] {
-        b'A' => match nn[1] {
-            b'A' => 222,
-            b'C' => 224,
-            b'G' => 210,
-            b'T' => 204,
-            _ => 224,
-        },
-        b'C' => match nn[1] {
-            b'A' => 227,
-            b'C' => 199,
-            b'G' => 272,
-            b'T' => 210,
-            _ => 272,
-        },
-        b'G' => match nn[1] {
-            b'A' => 222,
-            b'C' => 244,
-            b'G' => 199,
-            b'T' => 224,
-            _ => 244,
-        },
-        b'T' => match nn[1] {
-            b'A' => 213,
-            b'C' => 222,
-            b'G' => 227,
-            b'T' => 222,
-            _ => 227,
-        },
-        _ => 0,
-    }
-}
-
-#[allow(dead_code)]
-fn santa_lucia_1998_dh(nn: &[u8; 2]) -> i32 {
-    match nn[0] {
-        b'A' => match nn[1] {
-            b'A' => 79,
-            b'C' => 84,
-            b'G' => 78,
-            b'T' => 72,
-            _ => 0,
-        },
-        b'C' => match nn[1] {
-            b'A' => 85,
-            b'C' => 80,
-            b'G' => 106,
-            b'T' => 78,
-            _ => 0,
-        },
-        b'G' => match nn[1] {
-            b'A' => 82,
-            b'C' => 98,
-            b'G' => 80,
-            b'T' => 84,
-            _ => 0,
-        },
-        b'T' => match nn[1] {
-            b'A' => 72,
-            b'C' => 82,
-            b'G' => 85,
-            b'T' => 79,
-            _ => 0,
-        },
-        _ => 0,
-    }
-}
-
-fn santa_lucia_2004_ds(nn: &[u8; 2]) -> i32 {
-    match nn[0] {
-        b'A' => match nn[1] {
-            b'A' => 213,
-            b'C' => 224,
-            b'G' => 210,
-            b'T' => 204,
-            _ => 0,
-        },
-        b'C' => match nn[1] {
-            b'A' => 227,
-            b'C' => 199,
-            b'G' => 272,
-            b'T' => 210,
-            _ => 0,
-        },
-        b'G' => match nn[1] {
-            b'A' => 222,
-            b'C' => 244,
-            b'G' => 199,
-            b'T' => 224,
-            _ => 0,
-        },
-        b'T' => match nn[1] {
-            b'A' => 213,
-            b'C' => 222,
-            b'G' => 227,
-            b'T' => 213,
-            _ => 0,
-        },
-        _ => 0,
-    }
-}
-
-fn santa_lucia_2004_dh(nn: &[u8; 2]) -> i32 {
-    match nn[0] {
-        b'A' => match nn[1] {
-            b'A' => 76,
-            b'C' => 84,
-            b'G' => 78,
-            b'T' => 72,
-            _ => 0,
-        },
-        b'C' => match nn[1] {
-            b'A' => 85,
-            b'C' => 80,
-            b'G' => 106,
-            b'T' => 78,
-            _ => 0,
-        },
-        b'G' => match nn[1] {
-            b'A' => 82,
-            b'C' => 98,
-            b'G' => 80,
-            b'T' => 84,
-            _ => 0,
-        },
-        b'T' => match nn[1] {
-            b'A' => 72,
-            b'C' => 82,
-            b'G' => 85,
-            b'T' => 76,
-            _ => 0,
-        },
-        _ => 0,
-    }
-}
-
-static T_KELVIN: f64 = 273.15;
-
-#[derive(Clone, Debug)]
-pub enum TmMethod {
-    SantaLucia1998,
-    SantaLucia2004,
-}
-
-use std::fmt;
-
-impl fmt::Display for TmMethod {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            TmMethod::SantaLucia2004 => write!(f, "SantaLucia2004"),
-            TmMethod::SantaLucia1998 => write!(f, "SantaLucia1998"),
-            // other variants
-        }
-    }
-}
-
-static MAX_OLIGO_LEN: usize = 50;
-
+/// An oligo grown one base at a time during the digest walk, keeping its
+/// running nearest-neighbour sums so each extension is O(1).
 #[derive(Clone, Debug)]
 pub struct Oligo {
     pub seq: Vec<u8>,
-    dh_array: Vec<i32>,
-    ds_array: Vec<i32>,
+    duplex: Duplex,
 }
 
 impl Oligo {
-    pub fn new(seq: Vec<u8>) -> Self {
-        let mut dh_array = Vec::with_capacity(MAX_OLIGO_LEN);
-        let mut ds_array = Vec::with_capacity(MAX_OLIGO_LEN);
-
-        // Populate dh and ds with nn values
-        for i in 0..seq.len() - 1 {
-            dh_array.push(santa_lucia_2004_dh(&[seq[i], seq[i + 1]]));
-            ds_array.push(santa_lucia_2004_ds(&[seq[i], seq[i + 1]]));
-        }
-
-        Oligo {
-            seq,
-            dh_array,
-            ds_array,
-        }
+    /// Errors on any base other than A/C/G/T.
+    pub fn new(seq: Vec<u8>) -> Result<Self, ThalError> {
+        let duplex = Duplex::from_seq(&seq)?;
+        Ok(Oligo { seq, duplex })
     }
 
-    pub fn add_base(&mut self, base: u8) {
-        if self.seq.len() >= MAX_OLIGO_LEN {
-            return;
-        }
+    /// Append a base at the 3' end. Errors, leaving the oligo unchanged, on
+    /// any base other than A/C/G/T.
+    pub fn add_base(&mut self, base: u8) -> Result<(), ThalError> {
+        self.duplex.push(base)?;
         self.seq.push(base);
-
-        if self.seq.len() > 1 {
-            self.dh_array
-                .push(santa_lucia_2004_dh(&[self.seq[self.seq.len() - 2], base]));
-            self.ds_array
-                .push(santa_lucia_2004_ds(&[self.seq[self.seq.len() - 2], base]));
-        }
+        Ok(())
     }
 
-    pub fn calc_tm(
-        &self,
-        dna_nm: f64,
-        k_mm: f64,
-        divalent_conc: f64,
-        dntp_conc: f64,
-        dmso_conc: f64,
-        dmso_fact: f64,
-        formamide_conc: f64,
-    ) -> f64 {
-        //
-        let di_to_mo = divalent_to_monovalent(divalent_conc, dntp_conc).unwrap();
-        let sym = symmetry_utf8(&self.seq);
-        let gc_count = self.seq.iter().filter(|&&x| x == b'C' || x == b'G').count();
-
-        // SantaLucia2004
-        let mut ds = 57;
-        let mut dh = -2;
-
-        if sym {
-            ds += 14;
-        }
-        // Terminal penalty
-        match self.seq[0] {
-            b'A' | b'T' => {
-                ds += -69;
-                dh += -22;
-            }
-            _ => {}
-        }
-
-        // Sum the arrays
-        ds += self.ds_array.iter().sum::<i32>();
-        dh += self.dh_array.iter().sum::<i32>();
-
-        // End Terminal Pen
-        match self.seq[self.seq.len() - 1] {
-            b'A' | b'T' => {
-                ds += -69;
-                dh += -22;
-            }
-            _ => {}
-        }
-
-        // Convert
-        let delta_h = dh as f64 * -100.0;
-        let mut delta_s = ds as f64 * -0.1;
-
-        // Salt correction using santalucia
-        let adj_k_mm = k_mm + di_to_mo;
-        delta_s += 0.368 * ((self.seq.len() - 1) as f64) * (adj_k_mm / 1000.0).ln();
-
-        let dna_sym_adj = match sym {
-            true => 1000000000.0,
-            false => 4000000000.0,
-        };
-
-        let mut tm = delta_h / (delta_s + 1.987 * (dna_nm / dna_sym_adj).ln()) - T_KELVIN;
-        tm -= dmso_conc * dmso_fact;
-        tm += (0.453 * ((gc_count / self.seq.len()) as f64) - 2.88) * formamide_conc;
-
-        // Calc bound, and return if asked
-        // match annealing_temp {
-        //     Some(temp) => {
-        //         let ddg = delta_h - (temp + T_KELVIN) * delta_s;
-        //         let ka = ((-ddg) / (1.987 * (temp + T_KELVIN))).exp();
-        //         let bound = (1.0 / (1.0 + (1.0 / ((dna_nm / dna_sym_adj) * ka)).sqrt())) * 100.0;
-        //         return bound;
-        //     }
-        //     None => {}
-        // }
-
-        tm
+    /// Tm (°C) at `args`, as [`oligo_tm`].
+    pub fn tm(&self, args: &ThalArgs) -> f64 {
+        self.duplex.tm(args, nn::is_self_complementary(&self.seq))
     }
 
-    pub fn calc_annealing(
-        &self,
-        annealing_temp: f64,
-        dna_nm: f64,
-        k_mm: f64,
-        divalent_conc: f64,
-        dntp_conc: f64,
-    ) -> f64 {
-        //
-        let di_to_mo = divalent_to_monovalent(divalent_conc, dntp_conc).unwrap();
-        let sym = symmetry_utf8(&self.seq);
-
-        // SantaLucia2004
-        let mut ds = 57;
-        let mut dh = -2;
-
-        if sym {
-            ds += 14;
-        }
-        // Terminal penalty
-        match self.seq[0] {
-            b'A' | b'T' => {
-                ds += -69;
-                dh += -22;
-            }
-            _ => {}
-        }
-
-        // Sum the arrays
-        ds += self.ds_array.iter().sum::<i32>();
-        dh += self.dh_array.iter().sum::<i32>();
-
-        // End Terminal Pen
-        match self.seq[self.seq.len() - 1] {
-            b'A' | b'T' => {
-                ds += -69;
-                dh += -22;
-            }
-            _ => {}
-        }
-
-        // Convert
-        let delta_h = dh as f64 * -100.0;
-        let mut delta_s = ds as f64 * -0.1;
-
-        // Salt correction using santalucia
-        let adj_k_mm = k_mm + di_to_mo;
-        delta_s += 0.368 * ((self.seq.len() - 1) as f64) * (adj_k_mm / 1000.0).ln();
-
-        let dna_sym_adj = match sym {
-            true => 1000000000.0,
-            false => 4000000000.0,
-        };
-
-        let ddg = delta_h - (annealing_temp + T_KELVIN) * delta_s;
-        let ka = ((-ddg) / (1.987 * (annealing_temp + T_KELVIN))).exp();
-        let bound = (1.0 / (1.0 + (1.0 / ((dna_nm / dna_sym_adj) * ka)).sqrt())) * 100.0;
-
-        bound
+    /// Percentage bound at `temp_c` °C, as [`oligo_annealing`].
+    pub fn annealing(&self, args: &ThalArgs, temp_c: f64) -> f64 {
+        self.duplex
+            .annealing(args, nn::is_self_complementary(&self.seq), temp_c)
     }
 }
 
-fn divalent_to_monovalent(divalent: f64, dntp: f64) -> Result<f64, &'static str> {
-    if divalent == 0.0 {
+/// Tm (°C) of `seq` with its complement at `args`, including any DMSO or
+/// formamide correction. Errors on an empty sequence or a base other than
+/// A/C/G/T.
+pub fn oligo_tm(seq: &[u8], args: &ThalArgs) -> Result<f64, ThalError> {
+    nn::duplex_tm(seq, args)
+}
+
+/// Percentage of `seq` bound to its complement at `temp_c` °C (50 at the Tm
+/// without DMSO/formamide). Errors as [`oligo_tm`].
+pub fn oligo_annealing(seq: &[u8], args: &ThalArgs, temp_c: f64) -> Result<f64, ThalError> {
+    nn::duplex_annealing(seq, args, temp_c)
+}
+
+/// [`oligo_annealing`] at each of `temps` (°C), in order. Errors as
+/// [`oligo_tm`].
+pub fn oligo_annealing_profile(
+    seq: &[u8],
+    args: &ThalArgs,
+    temps: &[f64],
+) -> Result<Vec<f64>, ThalError> {
+    let oligo = Oligo::new(seq.to_vec())?;
+    if oligo.seq.is_empty() {
+        return Err(ThalError::EmptySequence);
+    }
+    Ok(temps.iter().map(|&t| oligo.annealing(args, t)).collect())
+}
+
+/// Percentage of `seq1` bound to `seq2` (both 5'->3', mismatches allowed) at
+/// `temp_c` °C: thal's heterodimer ΔH/ΔS through the same binding equation
+/// as [`oligo_annealing`], which it equals when `seq2` is `seq1`'s reverse
+/// complement. 0 if no structure forms. Errors as thal's heterodimer.
+pub fn hetero_annealing(
+    seq1: &[u8],
+    seq2: &[u8],
+    args: &ThalArgs,
+    temp_c: f64,
+) -> Result<f64, ThalError> {
+    let res = primer3_thal_rs::calc_heterodimer(seq1, seq2, args, false)?;
+    if !res.structure_found {
         return Ok(0.0);
     }
-    if divalent < 0.0 || dntp < 0.0 {
-        return Err("OLIGOTM_ERROR");
-    }
-    let adjusted_divalent = if divalent < dntp { dntp } else { divalent };
-    Ok(120.0 * (adjusted_divalent - dntp).sqrt())
-}
-
-fn symmetry_utf8(seq: &[u8]) -> bool {
-    let seq_len = seq.len();
-    if seq_len % 2 == 1 {
-        return false;
-    }
-    let mp = seq_len / 2;
-    for i in 0..mp {
-        let s = seq[i];
-        let e = seq[seq_len - 1 - i];
-        if (s == b'A' && e != b'T')
-            || (s == b'T' && e != b'A')
-            || (e == b'A' && s != b'T')
-            || (e == b'T' && s != b'A')
-        {
-            return false;
-        }
-        if (s == b'C' && e != b'G')
-            || (s == b'G' && e != b'C')
-            || (e == b'C' && s != b'G')
-            || (e == b'G' && s != b'C')
-        {
-            return false;
-        }
-    }
-    true
-}
-
-fn symmetry(seq: &Vec<usize>) -> bool {
-    let seq_len = seq.len();
-    if seq_len % 2 == 1 {
-        return false;
-    }
-    let mp = seq_len / 2;
-    for i in 0..mp {
-        let s = seq[i];
-        let e = seq[seq_len - 1 - i];
-        if (s == 0 && e != 3) || (s == 3 && e != 0) || (e == 0 && s != 3) || (e == 3 && s != 0) {
-            return false;
-        }
-        if (s == 1 && e != 2) || (s == 2 && e != 1) || (e == 1 && s != 2) || (e == 2 && s != 1) {
-            return false;
-        }
-    }
-    true
-}
-
-pub fn oligo_thermo(
-    seq_array: &[u8],
-    dna_nm: f64,
-    k_mm: f64,
-    divalent_conc: f64,
-    dntp_conc: f64,
-    dmso_conc: f64,
-    dmso_fact: f64,
-    formamide_conc: f64,
-    annealing_temp_c: f64,
-    tm_method: TmMethod,
-) -> (f64, f64) {
-    // Todo Salt correction
-
-    let di_to_mo = divalent_to_monovalent(divalent_conc, dntp_conc).unwrap();
-
-    let mut gc_count = 0;
-    // Convert to intarray:
-    let oligo_int: Vec<usize> = seq_array
-        .into_iter()
-        .map(|b| match b {
-            b'A' => 0,
-            b'C' => {
-                gc_count += 1;
-                1
-            }
-            b'G' => {
-                gc_count += 1;
-                2
-            }
-            b'T' => 3,
-            _ => 10,
-        })
-        .collect();
-
-    let sym = symmetry(&oligo_int);
-
-    let mut ds = 0;
-    let mut dh = 0;
-
-    match tm_method {
-        TmMethod::SantaLucia1998 => {
-            if sym {
-                ds += 14
-            }
-            // Terminal penalty
-            match oligo_int[0] {
-                0 | 3 => {
-                    ds += -41;
-                    dh += -23;
-                }
-                1 | 2 => {
-                    ds += 28;
-                    dh += -1;
-                }
-                _ => {}
-            }
-            // Sum the pairs up
-            for i in 0..oligo_int.len() - 1 {
-                ds += SANTA_LUCIA_1998_DS[oligo_int[i]][oligo_int[i + 1]];
-                dh += SANTA_LUCIA_1998_DH[oligo_int[i]][oligo_int[i + 1]];
-            }
-
-            // End Terminal Pen
-            match oligo_int[oligo_int.len() - 1] {
-                0 | 3 => {
-                    ds += -41;
-                    dh += -23;
-                }
-                1 | 2 => {
-                    ds += 28;
-                    dh += -1;
-                }
-                _ => {}
-            }
-        }
-        TmMethod::SantaLucia2004 => {
-            ds += 57;
-            dh += -2;
-
-            if sym {
-                ds += 14;
-            }
-            match oligo_int[0] {
-                0 | 3 => {
-                    ds += -69;
-                    dh += -22;
-                }
-                _ => {}
-            }
-            // Sum the pairs up
-            for i in 0..oligo_int.len() - 1 {
-                ds += SANTA_LUCIA_2004_DS[oligo_int[i]][oligo_int[i + 1]];
-                dh += SANTA_LUCIA_2004_DH[oligo_int[i]][oligo_int[i + 1]];
-            }
-            match oligo_int[oligo_int.len() - 1] {
-                0 | 3 => {
-                    ds += -69;
-                    dh += -22;
-                }
-                _ => {}
-            }
-        }
-    }
-
-    // Convert to
-    let delta_h = dh as f64 * -100.0;
-    let mut delta_s = ds as f64 * -0.1;
-
-    // Return values
-    let mut bound = 0.0;
-
-    // Salt correction using santalucia
-    let adj_k_mm = k_mm + di_to_mo;
-    delta_s += 0.368 * ((oligo_int.len() - 1) as f64) * (adj_k_mm / 1000.0).ln();
-
-    let dna_sym_adj = match sym {
-        true => 1000000000.0,
-        false => 4000000000.0,
-    };
-
-    let mut tm = delta_h / (delta_s + 1.987 * (dna_nm / dna_sym_adj).ln()) - T_KELVIN;
-    tm -= dmso_conc * dmso_fact;
-    tm += (0.453 * ((gc_count / oligo_int.len()) as f64) - 2.88) * formamide_conc;
-
-    // Calc bound
-    if annealing_temp_c > 0.0 {
-        let ddg = delta_h - (annealing_temp_c + T_KELVIN) * delta_s;
-        let ka = ((-ddg) / (1.987 * (annealing_temp_c + T_KELVIN))).exp();
-        bound = (1.0 / (1.0 + (1.0 / ((dna_nm / dna_sym_adj) * ka)).sqrt())) * 100.0;
-    }
-
-    //
-
-    (tm, bound)
-}
-
-fn _encode_base(b: u8) -> usize {
-    // Converts ascii base to index
-    match b {
-        b'A' => 0,
-        b'C' => 1,
-        b'G' => 2,
-        b'T' => 3,
-        _ => 4,
-    }
-}
-
-pub fn oligo_tm_utf8(
-    sequence: &[u8],
-    dna_nm: f64,
-    k_mm: f64,
-    divalent_conc: f64,
-    dntp_conc: f64,
-    dmso_conc: f64,
-    dmso_fact: f64,
-    formamide_conc: f64,
-    tm_method: TmMethod,
-) -> f64 {
-    oligo_thermo(
-        sequence,
-        dna_nm,
-        k_mm,
-        divalent_conc,
-        dntp_conc,
-        dmso_conc,
-        dmso_fact,
-        formamide_conc,
-        -10.0,
-        tm_method,
-    )
-    .0
-}
-
-pub fn oligo_annealing_utf8(
-    sequence: &[u8],
-    dna_nm: f64,
-    k_mm: f64,
-    divalent_conc: f64,
-    dntp_conc: f64,
-    dmso_conc: f64,
-    dmso_fact: f64,
-    formamide_conc: f64,
-    annealing_temp_c: f64,
-    tm_method: TmMethod,
-) -> f64 {
-    oligo_thermo(
-        sequence,
-        dna_nm,
-        k_mm,
-        divalent_conc,
-        dntp_conc,
-        dmso_conc,
-        dmso_fact,
-        formamide_conc,
-        annealing_temp_c,
-        tm_method,
-    )
-    .1
+    let symmetric = nn::is_self_complementary(seq1) && nn::is_self_complementary(seq2);
+    Ok(nn::bound_percent(res.dh, res.ds, args, symmetric, temp_c))
 }
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use crate::digest::conditions;
     use crate::seqfuncs::reverse_complement;
 
-    use super::*;
-
-    #[test]
-    fn test_sl_1998_ds() {
-        for n1 in [b'A', b'C', b'G', b'T'].iter() {
-            for n2 in [b'A', b'C', b'G', b'T'].iter() {
-                let nn = [*n1 as u8, *n2 as u8];
-                let r = santa_lucia_1998_ds(&nn);
-                let q = SANTA_LUCIA_1998_DS[_encode_base(nn[0])][_encode_base(nn[1])];
-                assert_eq!(r, q);
-            }
-        }
-
-        let nn = [b'A', b'A'];
-        let r = santa_lucia_1998_ds(&nn);
-        let q = SANTA_LUCIA_1998_DS[0][0];
-        assert_eq!(r, q);
-    }
-    #[test]
-    fn test_sl_1998_dh() {
-        for n1 in [b'A', b'C', b'G', b'T'].iter() {
-            for n2 in [b'A', b'C', b'G', b'T'].iter() {
-                let nn = [*n1 as u8, *n2 as u8];
-                let r = santa_lucia_1998_dh(&nn);
-                let q = SANTA_LUCIA_1998_DH[_encode_base(nn[0])][_encode_base(nn[1])];
-                assert_eq!(r, q);
-            }
-        }
-
-        let nn = [b'A', b'A'];
-        let r = santa_lucia_1998_dh(&nn);
-        let q = SANTA_LUCIA_1998_DH[0][0];
-        assert_eq!(r, q);
-    }
-
-    #[test]
-    fn test_sl_2004_ds() {
-        for n1 in [b'A', b'C', b'G', b'T'].iter() {
-            for n2 in [b'A', b'C', b'G', b'T'].iter() {
-                let nn = [*n1 as u8, *n2 as u8];
-                let r = santa_lucia_2004_ds(&nn);
-                let q = SANTA_LUCIA_2004_DS[_encode_base(nn[0])][_encode_base(nn[1])];
-                assert_eq!(r, q);
-            }
-        }
-
-        let nn = [b'A', b'A'];
-        let r = santa_lucia_2004_ds(&nn);
-        let q = SANTA_LUCIA_2004_DS[0][0];
-        assert_eq!(r, q);
-    }
-    #[test]
-    fn test_sl_2004_dh() {
-        for n1 in [b'A', b'C', b'G', b'T'].iter() {
-            for n2 in [b'A', b'C', b'G', b'T'].iter() {
-                let nn = [*n1 as u8, *n2 as u8];
-                let r = santa_lucia_2004_dh(&nn);
-                let q = SANTA_LUCIA_2004_DH[_encode_base(nn[0])][_encode_base(nn[1])];
-                assert_eq!(r, q);
-            }
-        }
-
-        let nn = [b'A', b'A'];
-        let r = santa_lucia_2004_dh(&nn);
-        let q = SANTA_LUCIA_2004_DH[0][0];
-        assert_eq!(r, q);
-    }
-    #[test]
-    fn test_oligo_vs_oligotm() {
-        let seq = "TCATTGTATCCTCACATAACTCTCCCAAA".as_bytes();
-
-        let oligo = Oligo::new(seq.to_vec());
-        let tm = oligo_tm_utf8(
-            &seq,
-            15.0,
-            100.0,
-            2.0,
-            0.8,
-            0.0,
-            0.0,
-            0.8,
-            TmMethod::SantaLucia2004,
-        );
-
-        let tm2 = oligo.calc_tm(15.0, 100.0, 2.0, 0.8, 0.0, 0.0, 0.8);
-        assert_eq!(tm, tm2);
-    }
     #[test]
     fn test_oligo_tm_rev() {
-        let kmer = "TCATTGTATCCTCACATAACTCTCCCAAA".as_bytes().to_vec();
-        let tm = oligo_tm_utf8(
-            &kmer,
-            15.0,
-            100.0,
-            2.0,
-            0.8,
-            0.0,
-            0.0,
-            0.8,
-            TmMethod::SantaLucia2004,
-        );
+        let kmer = b"TCATTGTATCCTCACATAACTCTCCCAAA".to_vec();
+        let tm = oligo_tm(&kmer, &conditions()).unwrap();
+        let tm_rev = oligo_tm(&reverse_complement(&kmer), &conditions()).unwrap();
+        assert!((tm - tm_rev).abs() < 1e-9);
+    }
+}
 
-        let rc_kmer = reverse_complement(&kmer);
-        let tm_rev = oligo_tm_utf8(
-            &rc_kmer,
-            15.0,
-            100.0,
-            2.0,
-            0.8,
-            0.0,
-            0.0,
-            0.8,
-            TmMethod::SantaLucia2004,
-        );
+/// Every Tm/annealing here must equal thal's for the same duplex.
+#[cfg(test)]
+mod consistency_tests {
+    use super::*;
+    use crate::digest::conditions;
+    use crate::seqfuncs::reverse_complement;
+    use primer3_thal_rs::{calc_heterodimer, ThalArgs};
 
-        assert_eq!(tm, tm_rev);
+    fn random_seqs(n: usize, mut state: u64) -> Vec<Vec<u8>> {
+        let mut next = move || {
+            state = state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            (state >> 33) as usize
+        };
+        (0..n)
+            .map(|_| (0..15 + next() % 20).map(|_| b"ACGT"[next() % 4]).collect())
+            .collect()
+    }
+
+    fn all_conditions() -> Vec<ThalArgs> {
+        let d = ThalArgs::default();
+        vec![
+            conditions(),
+            ThalArgs {
+                formamide_conc: 0.0,
+                ..conditions()
+            },
+            d,
+            ThalArgs {
+                dmso_conc: 5.0,
+                formamide_conc: 1.5,
+                ..d
+            },
+        ]
+    }
+
+    fn seqs() -> Vec<Vec<u8>> {
+        let mut seqs = random_seqs(300, 17);
+        for p in [
+            "ACGTACGTACGTACGTACGT",
+            "GAATTCGAATTCGAATTC",
+            "AAAAAAAAAAAAAAAAAAAA",
+        ] {
+            seqs.push(p.as_bytes().to_vec());
+        }
+        seqs
+    }
+
+    #[test]
+    fn test_oligo_tm_equals_thal_duplex_tm() {
+        for args in all_conditions() {
+            for seq in seqs() {
+                let thal = calc_heterodimer(&seq, reverse_complement(&seq), &args, false)
+                    .unwrap()
+                    .tm;
+                let tm = oligo_tm(&seq, &args).unwrap();
+                let walk = Oligo::new(seq.clone()).unwrap().tm(&args);
+                let label = String::from_utf8_lossy(&seq);
+                assert!((tm - thal).abs() < 1e-9, "{label}: {tm} vs thal {thal}");
+                assert_eq!(walk, tm, "{label}: walk Oligo differs");
+            }
+        }
+    }
+
+    #[test]
+    fn test_oligo_add_base_matches_whole_sequence() {
+        let args = conditions();
+        for seq in seqs() {
+            let mut oligo = Oligo::new(seq[..2].to_vec()).unwrap();
+            for &b in &seq[2..] {
+                oligo.add_base(b).unwrap();
+            }
+            assert_eq!(oligo.seq, seq);
+            assert_eq!(oligo.tm(&args), oligo_tm(&seq, &args).unwrap());
+            for t in [55.0, 65.0, 70.0] {
+                assert_eq!(
+                    oligo.annealing(&args, t),
+                    oligo_annealing(&seq, &args, t).unwrap()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_annealing_is_half_bound_at_tm() {
+        // Formamide shifts Tm, not binding, so compare without it
+        let args = ThalArgs {
+            formamide_conc: 0.0,
+            ..conditions()
+        };
+        for seq in seqs() {
+            let tm = oligo_tm(&seq, &args).unwrap();
+            assert!((oligo_annealing(&seq, &args, tm).unwrap() - 50.0).abs() < 1e-6);
+        }
+    }
+
+    #[test]
+    fn test_long_oligos_are_not_truncated() {
+        // The old Oligo silently stopped growing at 50 nt
+        let seq = random_seqs(1, 9)[0].repeat(4);
+        assert!(seq.len() > 50);
+        let mut oligo = Oligo::new(seq[..1].to_vec()).unwrap();
+        for &b in &seq[1..] {
+            oligo.add_base(b).unwrap();
+        }
+        assert_eq!(oligo.seq.len(), seq.len());
+        assert_eq!(
+            oligo.tm(&conditions()),
+            oligo_tm(&seq, &conditions()).unwrap()
+        );
+    }
+
+    #[test]
+    fn test_invalid_bases_are_errors() {
+        assert!(oligo_tm(b"", &conditions()).is_err());
+        assert!(oligo_tm(b"ACGTNACGT", &conditions()).is_err());
+        assert!(Oligo::new(b"ACGR".to_vec()).is_err());
+        let mut oligo = Oligo::new(b"ACGT".to_vec()).unwrap();
+        assert!(oligo.add_base(b'-').is_err());
+        assert_eq!(oligo.seq, b"ACGT");
+    }
+
+    #[test]
+    fn test_annealing_profile_equals_annealing_at_each_temperature() {
+        let temps: Vec<f64> = (40..=80).map(f64::from).collect();
+        for args in all_conditions() {
+            for seq in seqs() {
+                let profile = oligo_annealing_profile(&seq, &args, &temps).unwrap();
+                assert_eq!(profile.len(), temps.len());
+                for (&t, &a) in temps.iter().zip(&profile) {
+                    assert_eq!(a, oligo_annealing(&seq, &args, t).unwrap());
+                }
+            }
+        }
+        assert!(oligo_annealing_profile(b"", &conditions(), &temps).is_err());
+        assert!(oligo_annealing_profile(b"ACGN", &conditions(), &temps).is_err());
+        assert!(oligo_annealing_profile(b"ACGT", &conditions(), &[])
+            .unwrap()
+            .is_empty());
+    }
+
+    #[test]
+    fn test_hetero_annealing_with_complement_equals_annealing() {
+        for args in all_conditions() {
+            for seq in seqs() {
+                let rc = reverse_complement(&seq);
+                for t in [50.0, 60.0, 70.0] {
+                    let hetero = hetero_annealing(&seq, &rc, &args, t).unwrap();
+                    let duplex = oligo_annealing(&seq, &args, t).unwrap();
+                    assert!(
+                        (hetero - duplex).abs() < 1e-9,
+                        "{}: {hetero} vs {duplex}",
+                        String::from_utf8_lossy(&seq)
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_hetero_annealing_mismatches_and_errors() {
+        let args = conditions();
+        let seq = b"ACCAACGATGGTGTGTCCAT";
+        let mut site = reverse_complement(seq);
+        let perfect = hetero_annealing(seq, &site, &args, 55.0).unwrap();
+        site[10] = if site[10] == b'A' { b'C' } else { b'A' }; // one mismatch
+        let mismatched = hetero_annealing(seq, &site, &args, 55.0).unwrap();
+        assert!(mismatched < perfect && mismatched > 0.0);
+        // No structure binds nothing
+        assert_eq!(
+            hetero_annealing(b"AAAAAAAAAA", b"AAAAAAAAAA", &args, 55.0),
+            Ok(0.0)
+        );
+        // thal's input errors pass through
+        assert!(hetero_annealing(b"", b"ACGT", &args, 55.0).is_err());
     }
 }

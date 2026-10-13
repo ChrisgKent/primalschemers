@@ -342,7 +342,7 @@ checksum = "f84267b20a16ea918e43c6a88433c2d54fa145c92a811b5b047ccbe153674483"
 
 [[package]]
 name = "primalschemers"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "criterion",
  "indicatif",
@@ -354,9 +354,9 @@ dependencies = [
 
 [[package]]
 name = "primer3-thal-rs"
-version = "0.1.0"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b2a977ab9ade5a5a1176fe26c180b3b50d4e6bdbaca0a03b7cbea4c5b6402b2a"
+checksum = "c9fc7274c45bf92cf4c02bdcb6c703b09d86df60c4164a57b72a4207f9d1cf2f"
 dependencies = [
  "rayon",
 ]

@@ -1,16 +1,25 @@
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 
 pub fn fasta_reader(file: &str) -> (Vec<String>, Vec<String>) {
+    try_fasta_reader(file).unwrap_or_else(|e| panic!("{e}"))
+}
+
+/// Headers and uppercased sequences of a FASTA file, or why it can't be
+/// read: a missing file, or sequence before the first header.
+pub fn try_fasta_reader(file: &str) -> Result<(Vec<String>, Vec<String>), String> {
     let mut seqs: Vec<Vec<String>> = Vec::new();
     let mut headers: Vec<String> = Vec::new();
 
-    let file = std::fs::read_to_string(file).expect("Failed to read file");
-    for line in file.lines() {
+    let contents =
+        std::fs::read_to_string(file).map_err(|e| format!("Failed to read {file}: {e}"))?;
+    for line in contents.lines() {
         if line.starts_with('>') {
             headers.push(line.to_string());
             seqs.push(Vec::new());
-        } else {
-            seqs.last_mut().unwrap().push(line.to_string());
+        } else if let Some(seq) = seqs.last_mut() {
+            seq.push(line.to_string());
+        } else if !line.trim().is_empty() {
+            return Err(format!("{file}: sequence before the first FASTA header"));
         }
     }
 
@@ -19,7 +28,7 @@ pub fn fasta_reader(file: &str) -> (Vec<String>, Vec<String>) {
         .map(|seq_list| seq_list.concat().to_uppercase())
         .collect::<Vec<String>>();
 
-    (headers, seqs_final)
+    Ok((headers, seqs_final))
 }
 
 pub fn remove_end_insertions(mut seq_array: Vec<Vec<u8>>) -> Vec<Vec<u8>> {
@@ -45,15 +54,15 @@ pub fn remove_end_insertions(mut seq_array: Vec<Vec<u8>>) -> Vec<Vec<u8>> {
     }
     seq_array
 }
-pub fn calc_most_common_base(seq_array: &Vec<Vec<u8>>) -> Vec<u8> {
+pub fn calc_most_common_base(seq_array: &[Vec<u8>]) -> Vec<u8> {
     // If equal values. Will last in order of ACGT
     let indexes = 0..seq_array[0].len();
     let most_common_base = indexes
         .into_par_iter()
         .map(|basei| {
             let mut base_count: Vec<usize> = vec![0; 4];
-            for seqi in 0..seq_array.len() {
-                match seq_array[seqi][basei] {
+            for seq in seq_array {
+                match seq[basei] {
                     b'A' => base_count[0] += 1,
                     b'C' => base_count[1] += 1,
                     b'G' => base_count[2] += 1,

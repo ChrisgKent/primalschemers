@@ -3,7 +3,9 @@
 //!
 //! Signatures, defaults, results and errors follow primer3-py 2.3.0, which
 //! primer3-thal-rs reproduces, so primalscheme3 can switch with only an
-//! import change.
+//! import change. They also take optional DMSO/formamide (not in primer3's
+//! thal; off by default), and `calc_tm` gives a primer's Tm on the same
+//! model, as the digest uses.
 
 use primer3_thal_rs::{ThalArgs, ThalError};
 use pyo3::exceptions::{PyRuntimeError, PyTypeError, PyValueError};
@@ -55,7 +57,11 @@ impl PyThermoResult {
     fn __repr__(&self) -> String {
         format!(
             "ThermoResult(structure_found={}, tm={:.2}, dg={:.2}, dh={:.2}, ds={:.2})",
-            if self.structure_found { "True" } else { "False" },
+            if self.structure_found {
+                "True"
+            } else {
+                "False"
+            },
             self.tm,
             self.dg,
             self.dh,
@@ -102,6 +108,7 @@ fn seq_bytes(seq: &Bound<'_, PyAny>) -> PyResult<Vec<u8>> {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn thal_args(
     mv_conc: f64,
     dv_conc: f64,
@@ -109,6 +116,9 @@ fn thal_args(
     dna_conc: f64,
     temp_c: f64,
     max_loop: i32,
+    dmso_conc: f64,
+    dmso_fact: f64,
+    formamide_conc: f64,
 ) -> ThalArgs {
     ThalArgs {
         max_loop,
@@ -116,6 +126,9 @@ fn thal_args(
         dv: dv_conc,
         dntp: dntp_conc,
         dna_conc,
+        dmso_conc,
+        dmso_fact,
+        formamide_conc,
         ..ThalArgs::default()
     }
     .with_temp_c(temp_c)
@@ -124,10 +137,12 @@ fn thal_args(
 /// Hairpin thermodynamics of `seq`, as primer3-py's `calc_hairpin`.
 ///
 /// Concentrations are mM (`mv_conc`, `dv_conc`, `dntp_conc`) and nM
-/// (`dna_conc`); `temp_c` is in °C. Raises RuntimeError for an empty or
-/// >60 nt sequence, ValueError for `max_loop` outside 0..=30.
+/// (`dna_conc`); `temp_c` is in °C. `dmso_conc` (%), `dmso_fact` (°C per %)
+/// and `formamide_conc` (mol/l) shift Tm only, as primer3's oligotm; they
+/// default to no correction. Raises RuntimeError for an empty or >60 nt
+/// sequence, ValueError for `max_loop` outside 0..=30.
 #[pyfunction]
-#[pyo3(signature = (seq, mv_conc=50.0, dv_conc=1.5, dntp_conc=0.6, dna_conc=50.0, temp_c=37.0, max_loop=30, output_structure=false))]
+#[pyo3(signature = (seq, mv_conc=50.0, dv_conc=1.5, dntp_conc=0.6, dna_conc=50.0, temp_c=37.0, max_loop=30, output_structure=false, dmso_conc=0.0, dmso_fact=0.6, formamide_conc=0.0))]
 #[allow(clippy::too_many_arguments)]
 pub fn calc_hairpin(
     py: Python<'_>,
@@ -139,9 +154,22 @@ pub fn calc_hairpin(
     temp_c: f64,
     max_loop: i32,
     output_structure: bool,
+    dmso_conc: f64,
+    dmso_fact: f64,
+    formamide_conc: f64,
 ) -> PyResult<PyThermoResult> {
     let seq = seq_bytes(seq)?;
-    let args = thal_args(mv_conc, dv_conc, dntp_conc, dna_conc, temp_c, max_loop);
+    let args = thal_args(
+        mv_conc,
+        dv_conc,
+        dntp_conc,
+        dna_conc,
+        temp_c,
+        max_loop,
+        dmso_conc,
+        dmso_fact,
+        formamide_conc,
+    );
     let res = py
         .detach(|| primer3_thal_rs::calc_hairpin(&seq, &args, output_structure))
         .map_err(to_py_err)?;
@@ -151,7 +179,7 @@ pub fn calc_hairpin(
 /// Homodimer thermodynamics of `seq`, as primer3-py's `calc_homodimer`.
 /// Arguments and errors as `calc_hairpin`.
 #[pyfunction]
-#[pyo3(signature = (seq, mv_conc=50.0, dv_conc=1.5, dntp_conc=0.6, dna_conc=50.0, temp_c=37.0, max_loop=30, output_structure=false))]
+#[pyo3(signature = (seq, mv_conc=50.0, dv_conc=1.5, dntp_conc=0.6, dna_conc=50.0, temp_c=37.0, max_loop=30, output_structure=false, dmso_conc=0.0, dmso_fact=0.6, formamide_conc=0.0))]
 #[allow(clippy::too_many_arguments)]
 pub fn calc_homodimer(
     py: Python<'_>,
@@ -163,9 +191,22 @@ pub fn calc_homodimer(
     temp_c: f64,
     max_loop: i32,
     output_structure: bool,
+    dmso_conc: f64,
+    dmso_fact: f64,
+    formamide_conc: f64,
 ) -> PyResult<PyThermoResult> {
     let seq = seq_bytes(seq)?;
-    let args = thal_args(mv_conc, dv_conc, dntp_conc, dna_conc, temp_c, max_loop);
+    let args = thal_args(
+        mv_conc,
+        dv_conc,
+        dntp_conc,
+        dna_conc,
+        temp_c,
+        max_loop,
+        dmso_conc,
+        dmso_fact,
+        formamide_conc,
+    );
     let res = py
         .detach(|| primer3_thal_rs::calc_homodimer(&seq, &args, output_structure))
         .map_err(to_py_err)?;
@@ -176,7 +217,7 @@ pub fn calc_homodimer(
 /// primer3-py's `calc_heterodimer`. Arguments as `calc_hairpin`; only raises
 /// for length if both sequences exceed 60 nt.
 #[pyfunction]
-#[pyo3(signature = (seq1, seq2, mv_conc=50.0, dv_conc=1.5, dntp_conc=0.6, dna_conc=50.0, temp_c=37.0, max_loop=30, output_structure=false))]
+#[pyo3(signature = (seq1, seq2, mv_conc=50.0, dv_conc=1.5, dntp_conc=0.6, dna_conc=50.0, temp_c=37.0, max_loop=30, output_structure=false, dmso_conc=0.0, dmso_fact=0.6, formamide_conc=0.0))]
 #[allow(clippy::too_many_arguments)]
 pub fn calc_heterodimer(
     py: Python<'_>,
@@ -189,11 +230,192 @@ pub fn calc_heterodimer(
     temp_c: f64,
     max_loop: i32,
     output_structure: bool,
+    dmso_conc: f64,
+    dmso_fact: f64,
+    formamide_conc: f64,
 ) -> PyResult<PyThermoResult> {
     let (seq1, seq2) = (seq_bytes(seq1)?, seq_bytes(seq2)?);
-    let args = thal_args(mv_conc, dv_conc, dntp_conc, dna_conc, temp_c, max_loop);
+    let args = thal_args(
+        mv_conc,
+        dv_conc,
+        dntp_conc,
+        dna_conc,
+        temp_c,
+        max_loop,
+        dmso_conc,
+        dmso_fact,
+        formamide_conc,
+    );
     let res = py
         .detach(|| primer3_thal_rs::calc_heterodimer(&seq1, &seq2, &args, output_structure))
         .map_err(to_py_err)?;
     Ok(PyThermoResult::new(res, output_structure))
+}
+
+/// `calc_hairpin` of each of `seqs`, computed in parallel without the GIL.
+/// Arguments as `calc_hairpin`; raises on the first sequence that fails.
+#[pyfunction]
+#[pyo3(signature = (seqs, mv_conc=50.0, dv_conc=1.5, dntp_conc=0.6, dna_conc=50.0, temp_c=37.0, max_loop=30, output_structure=false, dmso_conc=0.0, dmso_fact=0.6, formamide_conc=0.0))]
+#[allow(clippy::too_many_arguments)]
+pub fn calc_hairpin_batch(
+    py: Python<'_>,
+    seqs: Vec<Bound<'_, PyAny>>,
+    mv_conc: f64,
+    dv_conc: f64,
+    dntp_conc: f64,
+    dna_conc: f64,
+    temp_c: f64,
+    max_loop: i32,
+    output_structure: bool,
+    dmso_conc: f64,
+    dmso_fact: f64,
+    formamide_conc: f64,
+) -> PyResult<Vec<PyThermoResult>> {
+    let seqs = seqs.iter().map(seq_bytes).collect::<PyResult<Vec<_>>>()?;
+    let args = thal_args(
+        mv_conc,
+        dv_conc,
+        dntp_conc,
+        dna_conc,
+        temp_c,
+        max_loop,
+        dmso_conc,
+        dmso_fact,
+        formamide_conc,
+    );
+    py.detach(|| primer3_thal_rs::calc_hairpin_batch(&seqs, &args, output_structure))
+        .into_iter()
+        .map(|r| {
+            r.map(|res| PyThermoResult::new(res, output_structure))
+                .map_err(to_py_err)
+        })
+        .collect()
+}
+
+/// `calc_heterodimer` of each `(seq1, seq2)` in `pairs`, computed in
+/// parallel without the GIL. Arguments as `calc_heterodimer`; raises on the
+/// first pair that fails.
+#[pyfunction]
+#[pyo3(signature = (pairs, mv_conc=50.0, dv_conc=1.5, dntp_conc=0.6, dna_conc=50.0, temp_c=37.0, max_loop=30, output_structure=false, dmso_conc=0.0, dmso_fact=0.6, formamide_conc=0.0))]
+#[allow(clippy::too_many_arguments)]
+pub fn calc_heterodimer_batch(
+    py: Python<'_>,
+    pairs: Vec<(Bound<'_, PyAny>, Bound<'_, PyAny>)>,
+    mv_conc: f64,
+    dv_conc: f64,
+    dntp_conc: f64,
+    dna_conc: f64,
+    temp_c: f64,
+    max_loop: i32,
+    output_structure: bool,
+    dmso_conc: f64,
+    dmso_fact: f64,
+    formamide_conc: f64,
+) -> PyResult<Vec<PyThermoResult>> {
+    let pairs = pairs
+        .iter()
+        .map(|(a, b)| Ok((seq_bytes(a)?, seq_bytes(b)?)))
+        .collect::<PyResult<Vec<_>>>()?;
+    let args = thal_args(
+        mv_conc,
+        dv_conc,
+        dntp_conc,
+        dna_conc,
+        temp_c,
+        max_loop,
+        dmso_conc,
+        dmso_fact,
+        formamide_conc,
+    );
+    py.detach(|| primer3_thal_rs::calc_heterodimer_batch(&pairs, &args, output_structure))
+        .into_iter()
+        .map(|r| {
+            r.map(|res| PyThermoResult::new(res, output_structure))
+                .map_err(to_py_err)
+        })
+        .collect()
+}
+
+/// Tm (°C) of `seq` paired with its complement: equal to
+/// `calc_heterodimer(seq, reverse_complement(seq)).tm` at the same
+/// conditions, and the Tm the digest checks (thal's nearest-neighbour
+/// model, not primer3's `calc_tm`). Arguments as `calc_hairpin`. Raises
+/// ValueError for an empty sequence or a base other than A/C/G/T.
+#[pyfunction]
+#[pyo3(signature = (seq, mv_conc=50.0, dv_conc=1.5, dntp_conc=0.6, dna_conc=50.0, dmso_conc=0.0, dmso_fact=0.6, formamide_conc=0.0))]
+#[allow(clippy::too_many_arguments)]
+pub fn calc_tm(
+    seq: &Bound<'_, PyAny>,
+    mv_conc: f64,
+    dv_conc: f64,
+    dntp_conc: f64,
+    dna_conc: f64,
+    dmso_conc: f64,
+    dmso_fact: f64,
+    formamide_conc: f64,
+) -> PyResult<f64> {
+    let seq = seq_bytes(seq)?;
+    let args = ThalArgs {
+        mv: mv_conc,
+        dv: dv_conc,
+        dntp: dntp_conc,
+        dna_conc,
+        dmso_conc,
+        dmso_fact,
+        formamide_conc,
+        ..ThalArgs::default()
+    };
+    crate::tm::oligo_tm(&seq, &args).map_err(|e| PyValueError::new_err(e.to_string()))
+}
+
+/// Percentage of `seq` bound to its complement at each of `temps` (°C), in
+/// order: `calc_annealing` at each temperature, on the digest's model.
+/// Raises ValueError for an empty sequence or a base other than A/C/G/T.
+#[pyfunction]
+#[pyo3(signature = (seq, temps, mv_conc=50.0, dv_conc=1.5, dntp_conc=0.6, dna_conc=50.0))]
+pub fn calc_annealing_profile(
+    seq: &Bound<'_, PyAny>,
+    temps: Vec<f64>,
+    mv_conc: f64,
+    dv_conc: f64,
+    dntp_conc: f64,
+    dna_conc: f64,
+) -> PyResult<Vec<f64>> {
+    let seq = seq_bytes(seq)?;
+    let args = ThalArgs {
+        mv: mv_conc,
+        dv: dv_conc,
+        dntp: dntp_conc,
+        dna_conc,
+        ..ThalArgs::default()
+    };
+    crate::tm::oligo_annealing_profile(&seq, &args, &temps)
+        .map_err(|e| PyValueError::new_err(e.to_string()))
+}
+
+/// Percentage of `seq1` bound to `seq2` (both 5'->3', mismatches allowed) at
+/// `temp_c` °C, from thal's heterodimer: equal to `calc_annealing` when
+/// `seq2` is `seq1`'s reverse complement. For a primer on a template site,
+/// pass the site's reverse complement as `seq2`. 0 if no structure forms.
+/// Errors as `calc_heterodimer`.
+#[pyfunction]
+#[pyo3(signature = (seq1, seq2, temp_c, mv_conc=50.0, dv_conc=1.5, dntp_conc=0.6, dna_conc=50.0, max_loop=30))]
+#[allow(clippy::too_many_arguments)]
+pub fn calc_annealing_hetero(
+    py: Python<'_>,
+    seq1: &Bound<'_, PyAny>,
+    seq2: &Bound<'_, PyAny>,
+    temp_c: f64,
+    mv_conc: f64,
+    dv_conc: f64,
+    dntp_conc: f64,
+    dna_conc: f64,
+    max_loop: i32,
+) -> PyResult<f64> {
+    let (seq1, seq2) = (seq_bytes(seq1)?, seq_bytes(seq2)?);
+    let args = thal_args(
+        mv_conc, dv_conc, dntp_conc, dna_conc, temp_c, max_loop, 0.0, 0.6, 0.0,
+    );
+    py.detach(|| crate::tm::hetero_annealing(&seq1, &seq2, &args, temp_c))
+        .map_err(to_py_err)
 }

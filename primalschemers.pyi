@@ -3,7 +3,8 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 class FKmer:
     def __init__(
         self, seqs: List[bytes], end: int, counts: Optional[List[float]] = None
-    ) -> None: ...
+    ) -> None:
+        """ValueError if counts and seqs differ in length."""
     def starts(self) -> List[int]: ...
     @property
     def end(self) -> int: ...
@@ -26,7 +27,8 @@ class FKmer:
 class RKmer:
     def __init__(
         self, seqs: List[bytes], start: int, counts: Optional[List[float]] = None
-    ) -> None: ...
+    ) -> None:
+        """ValueError if counts and seqs differ in length."""
     def seqs(self) -> List[str]: ...
     @property
     def start(self) -> int: ...
@@ -47,7 +49,9 @@ class RKmer:
     def passed(self) -> bool: ...
 
 class Digester:
-    def __init__(self, msa_path: str, ncores: int, remap: bool) -> None: ...
+    def __init__(self, msa_path: str, ncores: int, remap: bool) -> None:
+        """ValueError for an unreadable or empty MSA, or sequences of
+        different lengths."""
     def create_seq_slice(self) -> List[bytes]: ...
     def digest(
         self,
@@ -70,7 +74,17 @@ class Digester:
         thermo_check: bool = False,
         primer_hairpin_th_max: Optional[float] = None,
         return_all: bool = False,
-    ) -> Tuple[List[FKmer], List[RKmer], List[str]]: ...
+        mv_conc: Optional[float] = None,
+        dv_conc: Optional[float] = None,
+        dntp_conc: Optional[float] = None,
+        dna_conc: Optional[float] = None,
+        formamide_conc: Optional[float] = None,
+) -> Tuple[List[FKmer], List[RKmer], List[str]]:
+        """Digest the MSA (releases the GIL). Concentrations (mM; DNA nM) and
+        formamide (mol/l) set the Tm/annealing conditions, defaulting to
+        primalscheme3's (100, 2, 0.8, 15, formamide 0.8). The hairpin check
+        uses the same salts without formamide, as primer3's calc_hairpin.
+        Annealing mode is used whenever primer_annealing_prop is set."""
     @property
     def _seq_array(self) -> List[bytes]: ...
     @property
@@ -98,10 +112,17 @@ def digest_seq(
     min_freq: Optional[float] = None,
     ignore_n: Optional[bool] = None,
     dimerscore: Optional[float] = None,
-    thermo_check: Optional[bool] = None,
+    thermo_check: bool = True,
     primer_hairpin_th_max: Optional[float] = None,
     return_all: bool = False,
-) -> Tuple[List[FKmer], List[RKmer], List[str]]: ...
+    mv_conc: Optional[float] = None,
+    dv_conc: Optional[float] = None,
+    dntp_conc: Optional[float] = None,
+    dna_conc: Optional[float] = None,
+    formamide_conc: Optional[float] = None,
+) -> Tuple[List[FKmer], List[RKmer], List[str]]:
+    """Digester(msa_path, ncores, remap).digest(...), with thermo_check on
+    by default."""
 def do_seqs_interact(seq1: bytes, seq2: bytes, t: float) -> bool: ...
 def do_pool_interact(seqs1: List[bytes], seqs2: List[bytes], t: float) -> bool: ...
 def calc_at_offset_py(seq1: str, seq2: str, offset: int) -> float: ...
@@ -115,7 +136,9 @@ def calc_annealing(
     dmso_fact: float,
     formamide_conc: float,
     annealing_temp_c: float,
-) -> float: ...
+) -> float:
+    """% of sequence bound to its complement. DMSO/formamide are accepted
+    but don't affect binding. ValueError for non-ACGT bases."""
 def generate_primerpairs_py(
     fkmers: List[FKmer],
     rkmers: List[RKmer],
@@ -153,6 +176,9 @@ def calc_hairpin(
     temp_c: float = 37.0,
     max_loop: int = 30,
     output_structure: bool = False,
+    dmso_conc: float = 0.0,
+    dmso_fact: float = 0.6,
+    formamide_conc: float = 0.0,
 ) -> ThermoResult: ...
 def calc_homodimer(
     seq: Union[str, bytes],
@@ -163,6 +189,9 @@ def calc_homodimer(
     temp_c: float = 37.0,
     max_loop: int = 30,
     output_structure: bool = False,
+    dmso_conc: float = 0.0,
+    dmso_fact: float = 0.6,
+    formamide_conc: float = 0.0,
 ) -> ThermoResult: ...
 def calc_heterodimer(
     seq1: Union[str, bytes],
@@ -174,4 +203,70 @@ def calc_heterodimer(
     temp_c: float = 37.0,
     max_loop: int = 30,
     output_structure: bool = False,
+    dmso_conc: float = 0.0,
+    dmso_fact: float = 0.6,
+    formamide_conc: float = 0.0,
 ) -> ThermoResult: ...
+def calc_hairpin_batch(
+    seqs: List[Union[str, bytes]],
+    mv_conc: float = 50.0,
+    dv_conc: float = 1.5,
+    dntp_conc: float = 0.6,
+    dna_conc: float = 50.0,
+    temp_c: float = 37.0,
+    max_loop: int = 30,
+    output_structure: bool = False,
+    dmso_conc: float = 0.0,
+    dmso_fact: float = 0.6,
+    formamide_conc: float = 0.0,
+) -> List[ThermoResult]:
+    """calc_hairpin of each sequence, in parallel without the GIL."""
+def calc_heterodimer_batch(
+    pairs: List[Tuple[Union[str, bytes], Union[str, bytes]]],
+    mv_conc: float = 50.0,
+    dv_conc: float = 1.5,
+    dntp_conc: float = 0.6,
+    dna_conc: float = 50.0,
+    temp_c: float = 37.0,
+    max_loop: int = 30,
+    output_structure: bool = False,
+    dmso_conc: float = 0.0,
+    dmso_fact: float = 0.6,
+    formamide_conc: float = 0.0,
+) -> List[ThermoResult]:
+    """calc_heterodimer of each (seq1, seq2), in parallel without the GIL."""
+def calc_tm(
+    seq: Union[str, bytes],
+    mv_conc: float = 50.0,
+    dv_conc: float = 1.5,
+    dntp_conc: float = 0.6,
+    dna_conc: float = 50.0,
+    dmso_conc: float = 0.0,
+    dmso_fact: float = 0.6,
+    formamide_conc: float = 0.0,
+) -> float:
+    """Tm (°C) of seq with its complement, on thal's model (the digest's).
+    ValueError for an empty sequence or any base other than A/C/G/T."""
+def calc_annealing_profile(
+    seq: Union[str, bytes],
+    temps: List[float],
+    mv_conc: float = 50.0,
+    dv_conc: float = 1.5,
+    dntp_conc: float = 0.6,
+    dna_conc: float = 50.0,
+) -> List[float]:
+    """% bound at each temperature. ValueError for an empty sequence or any
+    base other than A/C/G/T."""
+def calc_annealing_hetero(
+    seq1: Union[str, bytes],
+    seq2: Union[str, bytes],
+    temp_c: float,
+    mv_conc: float = 50.0,
+    dv_conc: float = 1.5,
+    dntp_conc: float = 0.6,
+    dna_conc: float = 50.0,
+    max_loop: int = 30,
+) -> float:
+    """% of seq1 bound to seq2 (both 5'->3') via thal's heterodimer; 0 if no
+    structure forms. Unlike calc_tm/calc_annealing, N and other non-ACGT
+    bases are accepted (as unpairable, as primer3)."""
