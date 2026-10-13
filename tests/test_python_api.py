@@ -233,6 +233,65 @@ def test_calc_annealing_is_half_bound_at_calc_tm():
         ps.calc_annealing("ACGTN", 15.0, 100.0, 2.0, 0.8, 0.0, 0.6, 0.0, 60.0)
 
 
+PS3_POSITIONAL = (15.0, 100.0, 2.0, 0.8)  # calc_annealing's dna, mv, dv, dntp order
+TEMPS = [float(t) for t in range(40, 81)]
+
+
+def test_annealing_profile_equals_calc_annealing():
+    rng = random.Random(8)
+    for _ in range(50):
+        s = rseq(rng, rng.randint(18, 30))
+        profile = ps.calc_annealing_profile(s, TEMPS, **PS3_CONDITIONS)
+        expected = [ps.calc_annealing(s, *PS3_POSITIONAL, 0.0, 0.6, 0.0, t) for t in TEMPS]
+        assert profile == expected
+    # Defaults are primer3's conditions, and str/bytes/lowercase all work
+    s = "ACCAACGATGGTGTGTCCAT"
+    assert ps.calc_annealing_profile(s, [60.0]) == [ps.calc_annealing(s, 50.0, 50.0, 1.5, 0.6, 0.0, 0.6, 0.0, 60.0)]
+    assert ps.calc_annealing_profile(s.encode(), TEMPS) == ps.calc_annealing_profile(s.lower(), TEMPS)
+    assert ps.calc_annealing_profile(s, []) == []
+    for bad in ["", "ACGTNACGT"]:
+        with pytest.raises(ValueError):
+            ps.calc_annealing_profile(bad, TEMPS)
+
+
+@pytest.mark.parametrize("conditions", [{}, PS3_CONDITIONS])
+def test_annealing_hetero_with_complement_equals_calc_annealing(conditions):
+    c = dict(dict(mv_conc=50.0, dv_conc=1.5, dntp_conc=0.6, dna_conc=50.0), **conditions)
+    rng = random.Random(9)
+    seqs = [rseq(rng, rng.randint(18, 30)) for _ in range(50)] + ["ACGTACGTACGTACGTACGT"]
+    for s in seqs:
+        for t in (50.0, 60.0, 70.0):
+            hetero = ps.calc_annealing_hetero(s, rc(s), t, **conditions)
+            single = ps.calc_annealing(
+                s, c["dna_conc"], c["mv_conc"], c["dv_conc"], c["dntp_conc"], 0.0, 0.6, 0.0, t
+            )
+            assert hetero == pytest.approx(single, abs=1e-9), s
+
+
+def test_annealing_methods_agree_at_calc_tm():
+    # Every annealing method gives 50% bound at calc_tm (no formamide)
+    rng = random.Random(10)
+    for _ in range(30):
+        s = rseq(rng, rng.randint(18, 30))
+        tm = ps.calc_tm(s, **PS3_CONDITIONS)
+        assert ps.calc_annealing_profile(s, [tm], **PS3_CONDITIONS)[0] == pytest.approx(50.0, abs=1e-6)
+        assert ps.calc_annealing_hetero(s, rc(s), tm, **PS3_CONDITIONS) == pytest.approx(50.0, abs=1e-6)
+
+
+def test_annealing_hetero_mismatch_and_errors():
+    s = "ACCAACGATGGTGTGTCCAT"
+    site = list(rc(s))
+    perfect = ps.calc_annealing_hetero(s, "".join(site), 55.0, **PS3_CONDITIONS)
+    site[10] = "C" if site[10] == "A" else "A"
+    mismatched = ps.calc_annealing_hetero(s, "".join(site), 55.0, **PS3_CONDITIONS)
+    assert 0.0 < mismatched < perfect
+    assert ps.calc_annealing_hetero("AAAAAAAAAA", "AAAAAAAAAA", 55.0) == 0.0
+    with pytest.raises(RuntimeError):
+        ps.calc_annealing_hetero("", "ACGT", 55.0)
+    with pytest.raises(ValueError):
+        ps.calc_annealing_hetero(s, s, 55.0, max_loop=31)
+
+
 def test_tm_mode_digest_uses_calc_tm(msa_path):
     f, r, _ = ps.Digester(msa_path, 1, False).digest(
         thermo_check=True, primer_tm_min=59.5, primer_tm_max=62.5

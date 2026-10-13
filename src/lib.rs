@@ -526,6 +526,8 @@ fn primalschemers(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(thal::calc_homodimer, m)?)?;
     m.add_function(wrap_pyfunction!(thal::calc_heterodimer, m)?)?;
     m.add_function(wrap_pyfunction!(thal::calc_tm, m)?)?;
+    m.add_function(wrap_pyfunction!(thal::calc_annealing_profile, m)?)?;
+    m.add_function(wrap_pyfunction!(thal::calc_annealing_hetero, m)?)?;
 
     Ok(())
 }

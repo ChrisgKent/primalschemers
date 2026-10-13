@@ -54,6 +54,38 @@ pub fn oligo_annealing(seq: &[u8], args: &ThalArgs, temp_c: f64) -> Result<f64, 
     nn::duplex_annealing(seq, args, temp_c)
 }
 
+/// [`oligo_annealing`] at each of `temps` (°C), in order. Errors as
+/// [`oligo_tm`].
+pub fn oligo_annealing_profile(
+    seq: &[u8],
+    args: &ThalArgs,
+    temps: &[f64],
+) -> Result<Vec<f64>, ThalError> {
+    let oligo = Oligo::new(seq.to_vec())?;
+    if oligo.seq.is_empty() {
+        return Err(ThalError::EmptySequence);
+    }
+    Ok(temps.iter().map(|&t| oligo.annealing(args, t)).collect())
+}
+
+/// Percentage of `seq1` bound to `seq2` (both 5'->3', mismatches allowed) at
+/// `temp_c` °C: thal's heterodimer ΔH/ΔS through the same binding equation
+/// as [`oligo_annealing`], which it equals when `seq2` is `seq1`'s reverse
+/// complement. 0 if no structure forms. Errors as thal's heterodimer.
+pub fn hetero_annealing(
+    seq1: &[u8],
+    seq2: &[u8],
+    args: &ThalArgs,
+    temp_c: f64,
+) -> Result<f64, ThalError> {
+    let res = primer3_thal_rs::calc_heterodimer(seq1, seq2, args, false)?;
+    if !res.structure_found {
+        return Ok(0.0);
+    }
+    let symmetric = nn::is_self_complementary(seq1) && nn::is_self_complementary(seq2);
+    Ok(nn::bound_percent(res.dh, res.ds, args, symmetric, temp_c))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -190,5 +222,60 @@ mod consistency_tests {
         let mut oligo = Oligo::new(b"ACGT".to_vec()).unwrap();
         assert!(oligo.add_base(b'-').is_err());
         assert_eq!(oligo.seq, b"ACGT");
+    }
+
+    #[test]
+    fn test_annealing_profile_equals_annealing_at_each_temperature() {
+        let temps: Vec<f64> = (40..=80).map(f64::from).collect();
+        for args in all_conditions() {
+            for seq in seqs() {
+                let profile = oligo_annealing_profile(&seq, &args, &temps).unwrap();
+                assert_eq!(profile.len(), temps.len());
+                for (&t, &a) in temps.iter().zip(&profile) {
+                    assert_eq!(a, oligo_annealing(&seq, &args, t).unwrap());
+                }
+            }
+        }
+        assert!(oligo_annealing_profile(b"", &conditions(), &temps).is_err());
+        assert!(oligo_annealing_profile(b"ACGN", &conditions(), &temps).is_err());
+        assert!(oligo_annealing_profile(b"ACGT", &conditions(), &[])
+            .unwrap()
+            .is_empty());
+    }
+
+    #[test]
+    fn test_hetero_annealing_with_complement_equals_annealing() {
+        for args in all_conditions() {
+            for seq in seqs() {
+                let rc = reverse_complement(&seq);
+                for t in [50.0, 60.0, 70.0] {
+                    let hetero = hetero_annealing(&seq, &rc, &args, t).unwrap();
+                    let duplex = oligo_annealing(&seq, &args, t).unwrap();
+                    assert!(
+                        (hetero - duplex).abs() < 1e-9,
+                        "{}: {hetero} vs {duplex}",
+                        String::from_utf8_lossy(&seq)
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_hetero_annealing_mismatches_and_errors() {
+        let args = conditions();
+        let seq = b"ACCAACGATGGTGTGTCCAT";
+        let mut site = reverse_complement(seq);
+        let perfect = hetero_annealing(seq, &site, &args, 55.0).unwrap();
+        site[10] = if site[10] == b'A' { b'C' } else { b'A' }; // one mismatch
+        let mismatched = hetero_annealing(seq, &site, &args, 55.0).unwrap();
+        assert!(mismatched < perfect && mismatched > 0.0);
+        // No structure binds nothing
+        assert_eq!(
+            hetero_annealing(b"AAAAAAAAAA", b"AAAAAAAAAA", &args, 55.0),
+            Ok(0.0)
+        );
+        // thal's input errors pass through
+        assert!(hetero_annealing(b"", b"ACGT", &args, 55.0).is_err());
     }
 }

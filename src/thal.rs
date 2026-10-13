@@ -283,3 +283,55 @@ pub fn calc_tm(
     };
     crate::tm::oligo_tm(&seq, &args).map_err(|e| PyValueError::new_err(e.to_string()))
 }
+
+/// Percentage of `seq` bound to its complement at each of `temps` (°C), in
+/// order: `calc_annealing` at each temperature, on the digest's model.
+/// Raises ValueError for an empty sequence or a base other than A/C/G/T.
+#[pyfunction]
+#[pyo3(signature = (seq, temps, mv_conc=50.0, dv_conc=1.5, dntp_conc=0.6, dna_conc=50.0))]
+pub fn calc_annealing_profile(
+    seq: &Bound<'_, PyAny>,
+    temps: Vec<f64>,
+    mv_conc: f64,
+    dv_conc: f64,
+    dntp_conc: f64,
+    dna_conc: f64,
+) -> PyResult<Vec<f64>> {
+    let seq = seq_bytes(seq)?;
+    let args = ThalArgs {
+        mv: mv_conc,
+        dv: dv_conc,
+        dntp: dntp_conc,
+        dna_conc,
+        ..ThalArgs::default()
+    };
+    crate::tm::oligo_annealing_profile(&seq, &args, &temps)
+        .map_err(|e| PyValueError::new_err(e.to_string()))
+}
+
+/// Percentage of `seq1` bound to `seq2` (both 5'->3', mismatches allowed) at
+/// `temp_c` °C, from thal's heterodimer: equal to `calc_annealing` when
+/// `seq2` is `seq1`'s reverse complement. For a primer on a template site,
+/// pass the site's reverse complement as `seq2`. 0 if no structure forms.
+/// Errors as `calc_heterodimer`.
+#[pyfunction]
+#[pyo3(signature = (seq1, seq2, temp_c, mv_conc=50.0, dv_conc=1.5, dntp_conc=0.6, dna_conc=50.0, max_loop=30))]
+#[allow(clippy::too_many_arguments)]
+pub fn calc_annealing_hetero(
+    py: Python<'_>,
+    seq1: &Bound<'_, PyAny>,
+    seq2: &Bound<'_, PyAny>,
+    temp_c: f64,
+    mv_conc: f64,
+    dv_conc: f64,
+    dntp_conc: f64,
+    dna_conc: f64,
+    max_loop: i32,
+) -> PyResult<f64> {
+    let (seq1, seq2) = (seq_bytes(seq1)?, seq_bytes(seq2)?);
+    let args = thal_args(
+        mv_conc, dv_conc, dntp_conc, dna_conc, temp_c, max_loop, 0.0, 0.6, 0.0,
+    );
+    py.detach(|| crate::tm::hetero_annealing(&seq1, &seq2, &args, temp_c))
+        .map_err(to_py_err)
+}

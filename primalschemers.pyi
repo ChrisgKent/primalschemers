@@ -194,3 +194,21 @@ def calc_tm(
     dmso_fact: float = 0.6,
     formamide_conc: float = 0.0,
 ) -> float: ...
+def calc_annealing_profile(
+    seq: Union[str, bytes],
+    temps: List[float],
+    mv_conc: float = 50.0,
+    dv_conc: float = 1.5,
+    dntp_conc: float = 0.6,
+    dna_conc: float = 50.0,
+) -> List[float]: ...
+def calc_annealing_hetero(
+    seq1: Union[str, bytes],
+    seq2: Union[str, bytes],
+    temp_c: float,
+    mv_conc: float = 50.0,
+    dv_conc: float = 1.5,
+    dntp_conc: float = 0.6,
+    dna_conc: float = 50.0,
+    max_loop: int = 30,
+) -> float: ...
