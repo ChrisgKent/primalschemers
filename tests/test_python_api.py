@@ -349,11 +349,9 @@ def test_hairpin_threshold_matches_python_check(msa_path):
     d = ps.Digester(msa_path, 1, False)
 
     def hairpin_tm(s):
-        # primer3's hairpin Tm, shifted by the digest's formamide when a
-        # structure forms
-        res = primer3.calc_hairpin(s, **PS3_CONDITIONS)
-        shift = tm_shift(gc_fraction(s), **DIGEST_CONDITIONS) if res.structure_found else 0.0
-        return res.tm + shift
+        # primer3's hairpin Tm: the digest's salts, no formamide, exactly as
+        # primalscheme3's forms_hairpin
+        return primer3.calc_hairpin(s, **PS3_CONDITIONS).tm
 
     def forms_hairpin(seqs, th):  # primalscheme3's core/thermo.py check
         return any(hairpin_tm(s) > th for s in seqs)
@@ -515,7 +513,7 @@ def test_return_all_log_counts(msa_path):
     f, r, logs = d.digest(thermo_check=True, return_all=True)
     fail_count = sum(not k.passed() for k in f)
     pass_count = sum(k.passed() for k in f)
-    assert f"(ThermoResult(Fail), {fail_count})" in logs[0]
+    assert f"(ReturnedFailing, {fail_count})" in logs[0]
     assert f"(Pass, {pass_count})" in logs[0]
 
 
@@ -526,3 +524,161 @@ def test_return_all_with_remap_and_digest_seq(msa_path):
     f2, r2, _ = ps.digest_seq(msa_path, 1, True, return_all=True, primer_hairpin_th_max=55.0)
     assert by_key(f + r) == by_key(f2 + r2)
     assert [k.statuses() for k in f] == [k.statuses() for k in f2]
+
+
+# --- digest inputs, conditions and the stub ----------------------------------
+
+
+def test_digest_conditions_default_to_primalscheme3s(msa_path):
+    d = ps.Digester(msa_path, 1, False)
+    default = by_key(sum(d.digest(thermo_check=True)[:2], []))
+    explicit = d.digest(thermo_check=True, **DIGEST_CONDITIONS)
+    assert by_key(explicit[0] + explicit[1]) == default
+
+
+def test_digest_conditions_change_tm_window(msa_path):
+    low_salt = dict(DIGEST_CONDITIONS, mv_conc=30.0)
+    d = ps.Digester(msa_path, 1, False)
+    f, r, _ = d.digest(thermo_check=True, primer_tm_min=59.5, primer_tm_max=62.5, **low_salt)
+    assert f + r
+    for k in f + r:
+        for s in k.seqs():
+            assert 59.5 <= ps.calc_tm(s, **low_salt) < 62.5, s
+    default = d.digest(thermo_check=True, primer_tm_min=59.5, primer_tm_max=62.5)
+    assert by_key(f + r) != by_key(default[0] + default[1])
+
+
+def test_hairpin_check_ignores_formamide(msa_path):
+    # Formamide moves the Tm window, never the hairpin limit
+    d = ps.Digester(msa_path, 1, False)
+    window = dict(primer_tm_min=-1000.0, primer_tm_max=1000.0, primer_gc_min=0.0, primer_gc_max=1.0)
+    for formamide_conc in (0.0, 0.8, 3.0):
+        f, r, _ = d.digest(thermo_check=True, primer_hairpin_th_max=45.0, formamide_conc=formamide_conc, **window)
+        for k in f + r:
+            for s in k.seqs():
+                assert ps.calc_hairpin(s, **PS3_CONDITIONS).tm <= 45.0, s
+
+
+def test_annealing_mode_without_temperature_uses_default(msa_path):
+    # primer_annealing_prop alone selects annealing mode, at 65 °C
+    d = ps.Digester(msa_path, 1, False)
+    kw = dict(thermo_check=True, primer_annealing_prop=30.0, primer_annealing_diff=10.0)
+    f, r, _ = d.digest(**kw)
+    f65, r65, _ = d.digest(annealing_temp_c=65.0, **kw)
+    assert f + r and by_key(f + r) == by_key(f65 + r65)
+    tm_mode = d.digest(thermo_check=True)
+    assert by_key(f + r) != by_key(tm_mode[0] + tm_mode[1])
+
+
+@pytest.mark.parametrize(
+    "fasta,match",
+    [
+        ("", "no sequences"),
+        (">a\nACGTACGT\n>b\nACGT\n", "not the same length"),
+        ("ACGT\n>a\nACGT\n", "before the first FASTA header"),
+    ],
+)
+def test_bad_msa_raises(tmp_path, fasta, match):
+    path = tmp_path / "bad.fasta"
+    path.write_text(fasta)
+    with pytest.raises(ValueError, match=match):
+        ps.Digester(str(path), 1, False)
+    with pytest.raises(ValueError, match=match):
+        ps.digest_seq(str(path), 1, False)
+
+
+def test_missing_msa_raises(tmp_path):
+    with pytest.raises(ValueError, match="Failed to read"):
+        ps.Digester(str(tmp_path / "missing.fasta"), 1, False)
+
+
+def test_short_msa_digests_to_nothing(tmp_path):
+    path = tmp_path / "short.fasta"
+    path.write_text(">a\nACGTACGT\n>b\nACGTACGT\n")
+    f, r, _ = ps.Digester(str(path), 1, False).digest(thermo_check=True)
+    assert f == [] and r == []
+
+
+@pytest.mark.parametrize("cls", [ps.FKmer, ps.RKmer])
+def test_kmer_counts_length_mismatch_raises(cls):
+    with pytest.raises(ValueError, match="Different number"):
+        cls([b"ACGT", b"ACGA"], 10, [1.0])
+    assert cls([b"ACGT"], 10, [1.0]).counts() == [1.0]
+
+
+def test_digest_releases_the_gil(msa_path):
+    import threading
+    import time
+
+    d = ps.Digester(msa_path, 1, False)
+    span = {}
+    done = threading.Event()
+
+    def run():
+        span["start"] = time.perf_counter()
+        d.digest(thermo_check=True, return_all=True)
+        span["end"] = time.perf_counter()
+        done.set()
+
+    t = threading.Thread(target=run)
+    t.start()
+    stamps = []
+    while not done.is_set():
+        stamps.append(time.perf_counter())
+    t.join()
+    # This thread keeps running through the digest, not just in the switch
+    # interval (5 ms) before it takes the GIL
+    start, end = span["start"], span["end"]
+    assert end - start > 0.03
+    late = [s for s in stamps if start + 0.01 < s < end]
+    assert late and late[-1] - late[0] > 0.5 * (end - start - 0.01)
+
+
+def test_batch_equals_single():
+    rng = random.Random(7)
+    seqs = [rseq(rng, rng.randint(18, 34)) for _ in range(40)]
+    hairpins = ps.calc_hairpin_batch(seqs, output_structure=True, **PS3_CONDITIONS)
+    for s, b in zip(seqs, hairpins):
+        assert_same(b, ps.calc_hairpin(s, output_structure=True, **PS3_CONDITIONS), s)
+    pairs = list(zip(seqs, reversed(seqs)))
+    dimers = ps.calc_heterodimer_batch(pairs, **PS3_CONDITIONS)
+    for (a, c), b in zip(pairs, dimers):
+        assert_same(b, ps.calc_heterodimer(a, c, **PS3_CONDITIONS), (a, c))
+    assert ps.calc_hairpin_batch([b"ACGTACGT"])[0].tm == ps.calc_hairpin("ACGTACGT").tm
+    with pytest.raises(RuntimeError):
+        ps.calc_hairpin_batch(["ACGT", ""])
+
+
+@pytest.mark.parametrize("conditions", [{}, PS3_CONDITIONS])
+def test_calc_tm_close_to_primer3_calc_tm(conditions):
+    # Different models (thal's duplex vs primer3's oligotm), so not equal,
+    # but primers' Tms stay within about 0.1 °C
+    primer3 = pytest.importorskip("primer3")
+    rng = random.Random(11)
+    diffs = []
+    for _ in range(300):
+        s = rseq(rng, rng.randint(18, 34))
+        diffs.append(ps.calc_tm(s, **conditions) - primer3.calc_tm(s, **conditions))
+    assert max(abs(d) for d in diffs) < 0.25, max(diffs, key=abs)
+
+
+def test_stub_matches_signatures():
+    import ast
+    import inspect
+    import pathlib
+
+    stub = pathlib.Path(__file__).parent.parent / "primalschemers.pyi"
+    tree = ast.parse(stub.read_text())
+    funcs = {n.name: n for n in tree.body if isinstance(n, ast.FunctionDef)}
+    digester = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == "Digester")
+    funcs["Digester.digest"] = next(
+        n for n in digester.body if isinstance(n, ast.FunctionDef) and n.name == "digest"
+    )
+    for name, node in funcs.items():
+        obj = ps.Digester.digest if name == "Digester.digest" else getattr(ps, name)
+        params = [p for p in inspect.signature(obj).parameters.values() if p.name != "self"]
+        args = [a for a in node.args.args if a.arg != "self"]
+        assert [a.arg for a in args] == [p.name for p in params], name
+        defaults = [ast.literal_eval(d) for d in node.args.defaults]
+        runtime = [p.default for p in params if p.default is not inspect.Parameter.empty]
+        assert defaults == runtime, name

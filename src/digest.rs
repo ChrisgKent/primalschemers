@@ -8,25 +8,10 @@ use crate::{primaldimer, tm};
 
 use std::collections::HashMap;
 
-use primer3_thal_rs::ThalArgs;
-
 use indicatif::{ParallelProgressIterator, ProgressBar, ProgressStyle};
 use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 
-/// The reaction conditions every thermodynamic check in the digest uses:
-/// primer Tm and annealing, and the hairpin check. primalscheme3's salt and
-/// DNA concentrations (100 mM monovalent, 2 mM divalent, 0.8 mM dNTP,
-/// 15 nM DNA) with 0.8 M formamide, at 37 °C with `max_loop` 30.
-pub fn conditions() -> ThalArgs {
-    ThalArgs {
-        mv: 100.0,
-        dv: 2.0,
-        dntp: 0.8,
-        dna_conc: 15.0,
-        formamide_conc: 0.8,
-        ..ThalArgs::default()
-    }
-}
+pub use crate::config::conditions;
 
 #[derive(Eq, PartialEq, Hash, Debug, Clone)]
 pub enum DigestError {
@@ -62,12 +47,14 @@ pub enum IndexResult {
     DigestError(DigestError),
     Pass(),
     NotChecked(),
+    /// Logged for a `return_all` kmer that a normal digest would reject.
+    ReturnedFailing(),
 }
 
 /// Log status of a kmer kept by the digest.
 pub static PASSED: IndexResult = IndexResult::Pass();
 /// Log status of a kmer returned by `return_all` that a normal digest rejects.
-pub static RETURNED_FAILING: IndexResult = IndexResult::ThermoResult(ThermoResult::Fail);
+pub static RETURNED_FAILING: IndexResult = IndexResult::ReturnedFailing();
 
 pub struct DigestionKmers {
     pub seq: Option<Vec<u8>>,
@@ -164,7 +151,7 @@ pub fn thermo_failures(kmer: &[u8], dconf: &DigestConfig, all: bool) -> Vec<Ther
     match dconf.thermo_type {
         ThermoType::TM => {
             // Non-ACGT bases never reach here (expanded or rejected earlier)
-            let Ok(tm) = tm::oligo_tm(kmer, &conditions()) else {
+            let Ok(tm) = tm::oligo_tm(kmer, &dconf.thal) else {
                 fail!(ThermoResult::Fail);
                 return failures;
             };
@@ -176,7 +163,7 @@ pub fn thermo_failures(kmer: &[u8], dconf: &DigestConfig, all: bool) -> Vec<Ther
             }
         }
         ThermoType::ANNEALING => {
-            let Ok(prop) = tm::oligo_annealing(kmer, &conditions(), dconf.annealing_temp_c) else {
+            let Ok(prop) = tm::oligo_annealing(kmer, &dconf.thal, dconf.annealing_temp_c) else {
                 fail!(ThermoResult::Fail);
                 return failures;
             };
@@ -190,8 +177,9 @@ pub fn thermo_failures(kmer: &[u8], dconf: &DigestConfig, all: bool) -> Vec<Ther
         }
     }
 
-    // Hairpin: fail if its Tm exceeds the limit (as primalscheme3's forms_hairpin)
-    match primer3_thal_rs::calc_hairpin(kmer, &conditions(), false) {
+    // Hairpin: fail if its Tm exceeds the limit (as primalscheme3's
+    // forms_hairpin, so without formamide)
+    match primer3_thal_rs::calc_hairpin(kmer, &dconf.hairpin_thal(), false) {
         Ok(hairpin) if hairpin.tm > dconf.primer_hairpin_th_max => fail!(ThermoResult::Hairpin),
         Ok(_) => {}
         // Only for > 60 nt, which primer_len_max prevents
@@ -242,6 +230,7 @@ fn status_name(status: &IndexResult) -> String {
         IndexResult::DigestError(e) => format!("{e:?}"),
         IndexResult::Pass() => "Pass".to_string(),
         IndexResult::NotChecked() => "NotChecked".to_string(),
+        IndexResult::ReturnedFailing() => "ReturnedFailing".to_string(),
     }
 }
 
@@ -324,10 +313,10 @@ pub fn opto_binding(
                 let distance = |s: &[u8]| match dconf.thermo_type {
                     ThermoType::TM => {
                         let target_tm = (dconf.primer_tm_max + dconf.primer_tm_min) / 2.0;
-                        tm::oligo_tm(s, &conditions()).map(|tm| (tm - target_tm).abs())
+                        tm::oligo_tm(s, &dconf.thal).map(|tm| (tm - target_tm).abs())
                     }
                     ThermoType::ANNEALING => {
-                        tm::oligo_annealing(s, &conditions(), dconf.annealing_temp_c)
+                        tm::oligo_annealing(s, &dconf.thal, dconf.annealing_temp_c)
                             .map(|a| (a - dconf.primer_annealing_prop.unwrap()).abs())
                     }
                 };
@@ -389,12 +378,12 @@ pub fn walk_right(
 
     match dconf.thermo_type {
         ThermoType::TM => {
-            if kmer.tm(&conditions()) >= dconf.primer_tm_min {
+            if kmer.tm(&dconf.thal) >= dconf.primer_tm_min {
                 return vec![Ok(kmer.seq)];
             }
         }
         ThermoType::ANNEALING => {
-            if kmer.annealing(&conditions(), dconf.annealing_temp_c)
+            if kmer.annealing(&dconf.thal, dconf.annealing_temp_c)
                 >= dconf.primer_annealing_prop.unwrap()
             {
                 return vec![Ok(kmer.seq)];
@@ -461,7 +450,8 @@ pub fn digest_r_to_count(
     let mut kmer_count: HashMap<Result<Vec<u8>, DigestError>, f64> = HashMap::new();
 
     // Check bounds
-    if index > seqs[0].len() - dconf.primer_len_min {
+    // (written so a sequence shorter than primer_len_min can't underflow)
+    if index + dconf.primer_len_min > seqs[0].len() {
         kmer_count.insert(Err(DigestError::WalkedOutRight), seqs.len() as f64);
         return kmer_count;
     }
@@ -681,12 +671,12 @@ pub fn walk_left(
     // Check tm
     match dconf.thermo_type {
         ThermoType::TM => {
-            if kmer.tm(&conditions()) >= dconf.primer_tm_min {
+            if kmer.tm(&dconf.thal) >= dconf.primer_tm_min {
                 return vec![Ok(kmer.seq)];
             }
         }
         ThermoType::ANNEALING => {
-            if kmer.annealing(&conditions(), dconf.annealing_temp_c)
+            if kmer.annealing(&dconf.thal, dconf.annealing_temp_c)
                 >= dconf.primer_annealing_prop.unwrap()
             {
                 return vec![Ok(kmer.seq)];
@@ -980,6 +970,7 @@ pub fn digest_f_primer(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use primer3_thal_rs::ThalArgs;
 
     /// A config whose GC, Tm and homopolymer limits pass anything, so only
     /// the hairpin check can fail.
@@ -1003,6 +994,7 @@ mod tests {
             None,
             Some(primer_hairpin_th_max),
             None,
+            None,
         )
     }
 
@@ -1018,19 +1010,66 @@ mod tests {
     #[test]
     fn test_hairpin_tm_matches_primer3_py() {
         // primer3.calc_hairpin(seq, mv_conc=100, dv_conc=2, dntp_conc=0.8,
-        // dna_conc=15), shifted by the digest's formamide correction
+        // dna_conc=15): the hairpin check leaves out the digest's formamide,
+        // as primer3 and primalscheme3's forms_hairpin do
+        let dconf = DigestConfig::create_default();
+        assert_eq!(dconf.thal.formamide_conc, 0.8);
+        let args = dconf.hairpin_thal();
+        assert_eq!((args.formamide_conc, args.dmso_conc), (0.0, 0.0));
         let cases = [
             ("CCCCCATCCGATCAGGGGG", 67.96550347919458),
             ("ACGTACGTTTTTACGTACGT", 69.16336781546374),
         ];
         for (seq, primer3) in cases {
-            let gc = gc_content(seq.as_bytes());
-            let expected = primer3 + primer3_thal_rs::nn::tm_correction(gc, &conditions());
-            let res = primer3_thal_rs::calc_hairpin(seq, &conditions(), false).unwrap();
-            assert!((res.tm - expected).abs() < 1e-6, "{seq}: {} vs {expected}", res.tm);
+            let res = primer3_thal_rs::calc_hairpin(seq, &args, false).unwrap();
+            assert!((res.tm - primer3).abs() < 1e-6, "{seq}: {} vs {primer3}", res.tm);
         }
-        let none = primer3_thal_rs::calc_hairpin("GTAAAACGACGGCCAGTGAAT", &conditions(), false);
+        let none = primer3_thal_rs::calc_hairpin("GTAAAACGACGGCCAGTGAAT", &args, false);
         assert_eq!(none.unwrap().tm, 0.0);
+    }
+
+    #[test]
+    fn test_msa_shorter_than_primer_len_min() {
+        // Used to underflow (debug) or slice out of bounds (release)
+        let dconf = DigestConfig::create_default();
+        let seqs: Vec<&[u8]> = vec![b"ACGTACGT", b"ACGTACGT"];
+        let counts = digest_r_to_count(&seqs, 0, &dconf);
+        assert_eq!(counts.get(&Err(DigestError::WalkedOutRight)), Some(&2.0));
+        assert!(digest_r_primer(&seqs, &dconf, None).iter().all(|r| r.is_err()));
+        assert!(digest_f_primer(&seqs, &dconf, None).iter().all(|r| r.is_err()));
+    }
+
+    #[test]
+    fn test_returned_failing_is_its_own_status() {
+        assert_ne!(RETURNED_FAILING, IndexResult::ThermoResult(ThermoResult::Fail));
+        assert_eq!(status_name(&RETURNED_FAILING), "ReturnedFailing");
+    }
+
+    #[test]
+    fn test_hairpin_check_ignores_formamide() {
+        // 67.97 °C hairpin (primer3): fails a 67 °C limit however much
+        // formamide the Tm conditions carry
+        let seq = b"CCCCCATCCGATCAGGGGG";
+        for formamide_conc in [0.0, 0.8, 2.0] {
+            let mut dconf = hairpin_only_config(67.0);
+            dconf.thal.formamide_conc = formamide_conc;
+            assert_eq!(thermo_check(seq, &dconf), ThermoResult::Hairpin);
+        }
+    }
+
+    #[test]
+    fn test_conditions_are_configurable() {
+        // The Tm window follows the configured salt, not fixed conditions
+        let seq = b"ACCAACGATGGTGTGTCCAT";
+        let mut dconf = hairpin_only_config(100.0);
+        let low_salt = ThalArgs { mv: 20.0, ..conditions() };
+        let tm = tm::oligo_tm(seq, &dconf.thal).unwrap();
+        let tm_low = tm::oligo_tm(seq, &low_salt).unwrap();
+        assert!(tm_low < tm - 1.0);
+        dconf.primer_tm_min = tm - 0.5;
+        assert_eq!(thermo_check(seq, &dconf), ThermoResult::Pass);
+        dconf.thal = low_salt;
+        assert_eq!(thermo_check(seq, &dconf), ThermoResult::LowTm);
     }
 
     #[test]
@@ -1038,8 +1077,8 @@ mod tests {
         // The Tm window is checked against exactly tm::oligo_tm at the
         // digest's conditions (formamide included)
         let seq = b"ACCAACGATGGTGTGTCCAT";
-        let tm = tm::oligo_tm(seq, &conditions()).unwrap();
         let mut dconf = hairpin_only_config(100.0);
+        let tm = tm::oligo_tm(seq, &dconf.thal).unwrap();
         dconf.primer_tm_min = tm - 1e-6;
         dconf.primer_tm_max = tm + 1e-6;
         assert_eq!(thermo_check(seq, &dconf), ThermoResult::Pass);
@@ -1063,7 +1102,8 @@ mod tests {
         );
         // Boundaries: fails only when the Tm (67.9655 °C) is strictly above
         // the limit, as primalscheme3's `tm > primer_hairpin_th_max`.
-        let tm = primer3_thal_rs::calc_hairpin(seq, &conditions(), false).unwrap().tm;
+        let args = hairpin_only_config(0.0).hairpin_thal();
+        let tm = primer3_thal_rs::calc_hairpin(seq, &args, false).unwrap().tm;
         assert_eq!(thermo_check(seq, &hairpin_only_config(tm - 0.01)), ThermoResult::Hairpin);
         assert_eq!(thermo_check(seq, &hairpin_only_config(tm)), ThermoResult::Pass);
         assert_eq!(thermo_check(seq, &hairpin_only_config(tm + 0.01)), ThermoResult::Pass);

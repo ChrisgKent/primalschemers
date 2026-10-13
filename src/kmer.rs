@@ -90,7 +90,7 @@ fn sorted_report(report: KmerReport) -> (Vec<Vec<u8>>, Vec<f64>, Statuses) {
     (seqs, counts, statuses)
 }
 
-#[derive(Debug, PartialEq, PartialOrd)]
+#[derive(Debug)]
 #[pyclass]
 pub struct FKmer {
     seqs: Vec<Vec<u8>>,
@@ -100,10 +100,19 @@ pub struct FKmer {
     statuses: Option<Statuses>,
 }
 
-// Implement Eq manually by ignoring the counts field
+// Equality and order compare only the sequences and position, ignoring
+// counts and statuses, so they agree with each other.
+impl PartialEq for FKmer {
+    fn eq(&self, other: &Self) -> bool {
+        self.cmp(other) == std::cmp::Ordering::Equal
+    }
+}
 impl Eq for FKmer {}
-
-// Implement Ord manually by ignoring the counts field for comparison
+impl PartialOrd for FKmer {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
 impl Ord for FKmer {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         // Compare only seqs and end, ignoring counts
@@ -114,22 +123,8 @@ impl Ord for FKmer {
     }
 }
 impl FKmer {
-    /// A kmer from a `return_all` digest, carrying every sequence's status.
-    pub fn from_report(report: KmerReport, end: usize) -> FKmer {
-        let (seqs, counts, statuses) = sorted_report(report);
-        FKmer {
-            seqs,
-            counts: Some(counts),
-            end,
-            statuses: Some(statuses),
-        }
-    }
-}
-
-#[pymethods]
-impl FKmer {
-    #[pyo3(signature = (seqs, end, counts=None,))]
-    #[new]
+    /// Sorted, deduplicated sequences (summing the counts of duplicates).
+    /// Panics if `counts` has a different length to `seqs`.
     pub fn new(seqs: Vec<Vec<u8>>, end: usize, counts: Option<Vec<f64>>) -> FKmer {
         let (sorted_seqs, sorted_counts) = match counts {
             Some(counts_vec) => {
@@ -169,6 +164,32 @@ impl FKmer {
             counts: sorted_counts,
             statuses: None,
         }
+    }
+
+    /// A kmer from a `return_all` digest, carrying every sequence's status.
+    pub fn from_report(report: KmerReport, end: usize) -> FKmer {
+        let (seqs, counts, statuses) = sorted_report(report);
+        FKmer {
+            seqs,
+            counts: Some(counts),
+            end,
+            statuses: Some(statuses),
+        }
+    }
+}
+
+#[pymethods]
+impl FKmer {
+    /// ValueError if `counts` is given with a different length to `seqs`.
+    #[new]
+    #[pyo3(signature = (seqs, end, counts=None,))]
+    fn py_new(seqs: Vec<Vec<u8>>, end: usize, counts: Option<Vec<f64>>) -> PyResult<FKmer> {
+        if counts.as_ref().is_some_and(|c| c.len() != seqs.len()) {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "Different number of seqs and counts",
+            ));
+        }
+        Ok(FKmer::new(seqs, end, counts))
     }
     pub fn starts(&self) -> Vec<usize> {
         // Returns the start positions of the sequences.
@@ -288,7 +309,7 @@ impl FKmer {
 }
 
 #[pyclass]
-#[derive(Debug, PartialEq, PartialOrd)]
+#[derive(Debug)]
 pub struct RKmer {
     seqs: Vec<Vec<u8>>,
     counts: Option<Vec<f64>>,
@@ -297,13 +318,22 @@ pub struct RKmer {
     statuses: Option<Statuses>,
 }
 
-// Implement Eq manually by ignoring the counts field
+// Equality and order compare only the sequences and position, ignoring
+// counts and statuses, so they agree with each other.
+impl PartialEq for RKmer {
+    fn eq(&self, other: &Self) -> bool {
+        self.cmp(other) == std::cmp::Ordering::Equal
+    }
+}
 impl Eq for RKmer {}
-
-// Implement Ord manually by ignoring the counts field for comparison
+impl PartialOrd for RKmer {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
 impl Ord for RKmer {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        // Compare only seqs and end, ignoring counts
+        // Compare only seqs and start, ignoring counts
         match self.seqs.cmp(&other.seqs) {
             std::cmp::Ordering::Equal => self.start.cmp(&other.start),
             ordering => ordering,
@@ -312,22 +342,8 @@ impl Ord for RKmer {
 }
 
 impl RKmer {
-    /// A kmer from a `return_all` digest, carrying every sequence's status.
-    pub fn from_report(report: KmerReport, start: usize) -> RKmer {
-        let (seqs, counts, statuses) = sorted_report(report);
-        RKmer {
-            seqs,
-            counts: Some(counts),
-            start,
-            statuses: Some(statuses),
-        }
-    }
-}
-
-#[pymethods]
-impl RKmer {
-    #[new]
-    #[pyo3(signature = (seqs, start, counts=None,))]
+    /// Sorted, deduplicated sequences (summing the counts of duplicates).
+    /// Panics if `counts` has a different length to `seqs`.
     pub fn new(seqs: Vec<Vec<u8>>, start: usize, counts: Option<Vec<f64>>) -> RKmer {
         let (sorted_seqs, sorted_counts) = match counts {
             Some(counts_vec) => {
@@ -368,6 +384,32 @@ impl RKmer {
             start: start,
             statuses: None,
         }
+    }
+
+    /// A kmer from a `return_all` digest, carrying every sequence's status.
+    pub fn from_report(report: KmerReport, start: usize) -> RKmer {
+        let (seqs, counts, statuses) = sorted_report(report);
+        RKmer {
+            seqs,
+            counts: Some(counts),
+            start,
+            statuses: Some(statuses),
+        }
+    }
+}
+
+#[pymethods]
+impl RKmer {
+    /// ValueError if `counts` is given with a different length to `seqs`.
+    #[new]
+    #[pyo3(signature = (seqs, start, counts=None,))]
+    fn py_new(seqs: Vec<Vec<u8>>, start: usize, counts: Option<Vec<f64>>) -> PyResult<RKmer> {
+        if counts.as_ref().is_some_and(|c| c.len() != seqs.len()) {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "Different number of seqs and counts",
+            ));
+        }
+        Ok(RKmer::new(seqs, start, counts))
     }
     pub fn seqs(&self) -> Vec<String> {
         // Return the sequences as strings
@@ -609,6 +651,19 @@ pub fn generate_primerpairs<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_kmer_equality_ignores_counts() {
+        use std::cmp::Ordering;
+        let f = |end, count| FKmer::new(vec![b"ACGT".to_vec()], end, Some(vec![count]));
+        assert_eq!(f(10, 1.0), f(10, 5.0));
+        assert_eq!(f(10, 1.0).cmp(&f(10, 5.0)), Ordering::Equal);
+        assert_ne!(f(10, 1.0), f(11, 1.0));
+        let r = |start, count| RKmer::new(vec![b"ACGT".to_vec()], start, Some(vec![count]));
+        assert_eq!(r(10, 1.0), r(10, 5.0));
+        assert_ne!(r(10, 1.0), r(11, 1.0));
+        assert!(r(10, 1.0) < r(11, 1.0));
+    }
 
     fn tags(t: &[&str]) -> Vec<String> {
         t.iter().map(|s| s.to_string()).collect()

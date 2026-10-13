@@ -252,6 +252,84 @@ pub fn calc_heterodimer(
     Ok(PyThermoResult::new(res, output_structure))
 }
 
+/// `calc_hairpin` of each of `seqs`, computed in parallel without the GIL.
+/// Arguments as `calc_hairpin`; raises on the first sequence that fails.
+#[pyfunction]
+#[pyo3(signature = (seqs, mv_conc=50.0, dv_conc=1.5, dntp_conc=0.6, dna_conc=50.0, temp_c=37.0, max_loop=30, output_structure=false, dmso_conc=0.0, dmso_fact=0.6, formamide_conc=0.0))]
+#[allow(clippy::too_many_arguments)]
+pub fn calc_hairpin_batch(
+    py: Python<'_>,
+    seqs: Vec<Bound<'_, PyAny>>,
+    mv_conc: f64,
+    dv_conc: f64,
+    dntp_conc: f64,
+    dna_conc: f64,
+    temp_c: f64,
+    max_loop: i32,
+    output_structure: bool,
+    dmso_conc: f64,
+    dmso_fact: f64,
+    formamide_conc: f64,
+) -> PyResult<Vec<PyThermoResult>> {
+    let seqs = seqs.iter().map(seq_bytes).collect::<PyResult<Vec<_>>>()?;
+    let args = thal_args(
+        mv_conc,
+        dv_conc,
+        dntp_conc,
+        dna_conc,
+        temp_c,
+        max_loop,
+        dmso_conc,
+        dmso_fact,
+        formamide_conc,
+    );
+    py.detach(|| primer3_thal_rs::calc_hairpin_batch(&seqs, &args, output_structure))
+        .into_iter()
+        .map(|r| r.map(|res| PyThermoResult::new(res, output_structure)).map_err(to_py_err))
+        .collect()
+}
+
+/// `calc_heterodimer` of each `(seq1, seq2)` in `pairs`, computed in
+/// parallel without the GIL. Arguments as `calc_heterodimer`; raises on the
+/// first pair that fails.
+#[pyfunction]
+#[pyo3(signature = (pairs, mv_conc=50.0, dv_conc=1.5, dntp_conc=0.6, dna_conc=50.0, temp_c=37.0, max_loop=30, output_structure=false, dmso_conc=0.0, dmso_fact=0.6, formamide_conc=0.0))]
+#[allow(clippy::too_many_arguments)]
+pub fn calc_heterodimer_batch(
+    py: Python<'_>,
+    pairs: Vec<(Bound<'_, PyAny>, Bound<'_, PyAny>)>,
+    mv_conc: f64,
+    dv_conc: f64,
+    dntp_conc: f64,
+    dna_conc: f64,
+    temp_c: f64,
+    max_loop: i32,
+    output_structure: bool,
+    dmso_conc: f64,
+    dmso_fact: f64,
+    formamide_conc: f64,
+) -> PyResult<Vec<PyThermoResult>> {
+    let pairs = pairs
+        .iter()
+        .map(|(a, b)| Ok((seq_bytes(a)?, seq_bytes(b)?)))
+        .collect::<PyResult<Vec<_>>>()?;
+    let args = thal_args(
+        mv_conc,
+        dv_conc,
+        dntp_conc,
+        dna_conc,
+        temp_c,
+        max_loop,
+        dmso_conc,
+        dmso_fact,
+        formamide_conc,
+    );
+    py.detach(|| primer3_thal_rs::calc_heterodimer_batch(&pairs, &args, output_structure))
+        .into_iter()
+        .map(|r| r.map(|res| PyThermoResult::new(res, output_structure)).map_err(to_py_err))
+        .collect()
+}
+
 /// Tm (°C) of `seq` paired with its complement: equal to
 /// `calc_heterodimer(seq, reverse_complement(seq)).tm` at the same
 /// conditions, and the Tm the digest checks (thal's nearest-neighbour
