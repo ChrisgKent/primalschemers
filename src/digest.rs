@@ -23,6 +23,9 @@ pub enum DigestError {
     MaxWalk,
     EndOfSequence,
     ToLong,
+    /// `return_all` only: `ToLong`, with the longer sequence that reaches the
+    /// Tm or annealing target.
+    ToLongSeq(Vec<u8>),
     ContainsN,
 }
 
@@ -64,6 +67,8 @@ pub struct DigestionKmers {
     pub failures: Vec<ThermoResult>,
     /// `return_all` only: below `min_freq` (a normal digest drops these).
     pub low_freq: bool,
+    /// `return_all` only: reached `primer_len_max` without passing the walk.
+    pub to_long: bool,
 }
 impl DigestionKmers {
     pub fn new(seq: Option<Vec<u8>>, status: Option<IndexResult>, count: f64) -> DigestionKmers {
@@ -73,6 +78,7 @@ impl DigestionKmers {
             count,
             failures: Vec::new(),
             low_freq: false,
+            to_long: false,
         }
     }
     pub fn calc_freq(&self, total: f64) -> f64 {
@@ -202,6 +208,12 @@ fn process_seqs(
                 dk._thermo_check(dconf);
                 dk
             }
+            Err(DigestError::ToLongSeq(s)) => {
+                let mut dk = DigestionKmers::new(Some(s), None, v);
+                dk._thermo_check(dconf);
+                dk.to_long = true;
+                dk
+            }
             Err(e) => DigestionKmers::new(None, Some(IndexResult::DigestError(e)), v),
         };
         digested.push(dk);
@@ -253,7 +265,11 @@ fn report_all(dks: Vec<DigestionKmers>, dconf: &DigestConfig) -> Result<KmerRepo
         };
         match (&dk.seq, &dk.status) {
             (Some(_), _) => {
-                let failures = dk.failures.iter().map(|f| format!("{f:?}")).collect();
+                let mut failures: Vec<String> =
+                    dk.failures.iter().map(|f| format!("{f:?}")).collect();
+                if dk.to_long {
+                    failures.push(format!("{:?}", DigestError::ToLong));
+                }
                 report.statuses.push(tag(failures));
                 report.counts.push(dk.count);
                 report.seqs.push(dk.seq.unwrap());
@@ -368,6 +384,16 @@ pub fn dedup_substr(
     seq_counts
 }
 
+/// A walk's sequence on reaching the Tm or annealing target: `ToLongSeq` if
+/// past `primer_len_max`, which only a `return_all` walk goes.
+fn reached(seq: Vec<u8>, dconf: &DigestConfig) -> Result<Vec<u8>, DigestError> {
+    if seq.len() > dconf.primer_len_max {
+        Err(DigestError::ToLongSeq(seq))
+    } else {
+        Ok(seq)
+    }
+}
+
 pub fn walk_right(
     seq: &[u8],
     l_index: usize,
@@ -380,20 +406,20 @@ pub fn walk_right(
     match dconf.thermo_type {
         ThermoType::TM => {
             if kmer.tm(&dconf.thal) >= dconf.primer_tm_min {
-                return vec![Ok(kmer.seq)];
+                return vec![reached(kmer.seq, dconf)];
             }
         }
         ThermoType::ANNEALING => {
             if kmer.annealing(&dconf.thal, dconf.annealing_temp_c)
                 >= dconf.primer_annealing_prop.unwrap()
             {
-                return vec![Ok(kmer.seq)];
+                return vec![reached(kmer.seq, dconf)];
             }
         }
     }
 
     // Check len
-    if kmer.seq.len() > dconf.primer_len_max {
+    if kmer.seq.len() >= dconf.primer_len_max && !dconf.return_all {
         return vec![Err(DigestError::ToLong)];
     }
 
@@ -552,6 +578,9 @@ pub fn digest_r_to_count(
     for (k, v) in kmer_count.into_iter() {
         let r = match k {
             Ok(seq) => Ok(reverse_complement(&seq)),
+            Err(DigestError::ToLongSeq(seq)) => {
+                Err(DigestError::ToLongSeq(reverse_complement(&seq)))
+            }
             Err(e) => Err(e),
         };
         rc_kmer_count.insert(r, v);
@@ -670,20 +699,20 @@ pub fn walk_left(
     match dconf.thermo_type {
         ThermoType::TM => {
             if kmer.tm(&dconf.thal) >= dconf.primer_tm_min {
-                return vec![Ok(kmer.seq)];
+                return vec![reached(kmer.seq, dconf)];
             }
         }
         ThermoType::ANNEALING => {
             if kmer.annealing(&dconf.thal, dconf.annealing_temp_c)
                 >= dconf.primer_annealing_prop.unwrap()
             {
-                return vec![Ok(kmer.seq)];
+                return vec![reached(kmer.seq, dconf)];
             }
         }
     }
 
     // Check len
-    if kmer.seq.len() > dconf.primer_len_max {
+    if kmer.seq.len() >= dconf.primer_len_max && !dconf.return_all {
         return vec![Err(DigestError::ToLong)];
     }
 
@@ -852,6 +881,9 @@ pub fn digest_f_to_count(
             Ok(mut kmer) => {
                 kmer = reverse_complement(&kmer);
                 un_reversed.insert(Ok(kmer), v);
+            }
+            Err(DigestError::ToLongSeq(kmer)) => {
+                un_reversed.insert(Err(DigestError::ToLongSeq(reverse_complement(&kmer))), v);
             }
             Err(dr) => {
                 un_reversed.insert(Err(dr), v);
@@ -1785,6 +1817,44 @@ mod tests {
         for e in expected.into_iter() {
             assert!(digested.contains_key(&Ok(e)),)
         }
+    }
+
+    #[test]
+    fn test_walk_stops_at_primer_len_max() {
+        let seqs = vec!["ATTAAAGGTTTATACCTTCCCAGGTAACAAACCAACCAACTTTCGATCTCTTGTAGATCT".as_bytes()];
+        // Passes Tm at 24 nt, so with a max of 23 it is too long
+        let mut dconf = DigestConfig::create_default();
+        dconf.primer_len_max = 23;
+        let digested = digest_f_to_count(&seqs, 40, &dconf);
+        assert_eq!(digested.len(), 1);
+        assert!(digested.contains_key(&Err(DigestError::ToLong)));
+
+        dconf.return_all = true;
+        let digested = digest_f_to_count(&seqs, 40, &dconf);
+        let exp = "TTCCCAGGTAACAAACCAACCAAC".as_bytes().to_vec();
+        assert_eq!(digested.get(&Err(DigestError::ToLongSeq(exp))), Some(&1.0));
+    }
+
+    #[test]
+    fn test_return_all_reports_to_long_seq() {
+        let genome =
+            b"AATTTAAATATTTAATTAAATTTATAATTTAAATATTAAATTTAATTGCGCCGGCGCGGCCGCATAAT".to_vec();
+        let seqs = vec![genome.as_slice()];
+        let mut dconf = DigestConfig::create_default();
+        dconf.primer_len_max = 25;
+        assert!(digest_r_at_index(&seqs, 10, &dconf).is_err());
+
+        dconf.return_all = true;
+        let k = digest_r_at_index(&seqs, 10, &dconf).unwrap();
+        let seq = k.seqs()[0].clone().into_bytes();
+        assert!(seq.len() > 25);
+        assert!(tm::oligo_tm(&seq, &dconf.thal).unwrap() >= dconf.primer_tm_min);
+        assert_eq!(seq, reverse_complement(&genome[10..10 + seq.len()]));
+        let statuses = &k.statuses().unwrap()[0];
+        assert!(statuses.contains(&"ToLong".to_string()));
+        assert!(!statuses.contains(&"LowTm".to_string()));
+        assert!(!k.passed());
+        assert!(k.errors().is_empty());
     }
 
     #[test]
