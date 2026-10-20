@@ -444,7 +444,7 @@ def test_return_all_status_vocabulary(msa_path):
     seq_tags = {t for k in f + r for tags in k.statuses() for t in tags}
     kmer_tags = {t for k in f + r for t in k.kmer_statuses()}
     error_tags = {t for k in f + r for tags, _ in k.errors() for t in tags}
-    known = {"LowGC", "HighGC", "Homopolymer", "HighTm", "LowTm", "Hairpin", "Fail", "LowFreq"}
+    known = {"LowGC", "HighGC", "Homopolymer", "HighTm", "LowTm", "Hairpin", "Fail", "ToLong", "LowFreq"}
     assert seq_tags and seq_tags <= known
     assert "Hairpin" in seq_tags
     assert kmer_tags <= {"PrimerDimer"}
