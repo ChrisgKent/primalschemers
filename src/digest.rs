@@ -394,6 +394,41 @@ fn reached(seq: Vec<u8>, dconf: &DigestConfig) -> Result<Vec<u8>, DigestError> {
     }
 }
 
+/// The walk's stopping point: the Tm window's midpoint, or the annealing target
+fn reached_target(kmer: &tm::Oligo, dconf: &DigestConfig) -> bool {
+    match dconf.thermo_type {
+        ThermoType::TM => kmer.tm(&dconf.thal) >= (dconf.primer_tm_min + dconf.primer_tm_max) / 2.0,
+        ThermoType::ANNEALING => {
+            kmer.annealing(&dconf.thal, dconf.annealing_temp_c)
+                >= dconf.primer_annealing_prop.unwrap()
+        }
+    }
+}
+
+/// The kmer is above the bottom of the Tm or annealing window
+fn in_window(kmer: &tm::Oligo, dconf: &DigestConfig) -> bool {
+    match dconf.thermo_type {
+        ThermoType::TM => kmer.tm(&dconf.thal) >= dconf.primer_tm_min,
+        ThermoType::ANNEALING => {
+            kmer.annealing(&dconf.thal, dconf.annealing_temp_c)
+                >= dconf.primer_annealing_prop.unwrap() - dconf.annealing_diff
+        }
+    }
+}
+
+/// A walk that ends before its target: the kmer if it is in the window, else `err`
+fn walk_end(
+    kmer: tm::Oligo,
+    err: DigestError,
+    dconf: &DigestConfig,
+) -> Vec<Result<Vec<u8>, DigestError>> {
+    if in_window(&kmer, dconf) {
+        vec![reached(kmer.seq, dconf)]
+    } else {
+        vec![Err(err)]
+    }
+}
+
 pub fn walk_right(
     seq: &[u8],
     l_index: usize,
@@ -403,41 +438,35 @@ pub fn walk_right(
 ) -> Vec<Result<Vec<u8>, DigestError>> {
     // Check tm
 
-    match dconf.thermo_type {
-        ThermoType::TM => {
-            if kmer.tm(&dconf.thal) >= dconf.primer_tm_min {
-                return vec![reached(kmer.seq, dconf)];
-            }
-        }
-        ThermoType::ANNEALING => {
-            if kmer.annealing(&dconf.thal, dconf.annealing_temp_c)
-                >= dconf.primer_annealing_prop.unwrap()
-            {
-                return vec![reached(kmer.seq, dconf)];
-            }
-        }
+    if reached_target(&kmer, dconf) {
+        return vec![reached(kmer.seq, dconf)];
     }
 
     // Check len
-    if kmer.seq.len() >= dconf.primer_len_max && !dconf.return_all {
-        return vec![Err(DigestError::ToLong)];
+    if kmer.seq.len() >= dconf.primer_len_max {
+        if in_window(&kmer, dconf) {
+            return vec![reached(kmer.seq, dconf)];
+        }
+        if !dconf.return_all {
+            return vec![Err(DigestError::ToLong)];
+        }
     }
 
     // Check if we've reached the end of the sequence
     if r_index < l_index || r_index - l_index >= dconf.max_walk {
-        return vec![Err(DigestError::MaxWalk)];
+        return walk_end(kmer, DigestError::MaxWalk, dconf);
     }
     // Check bounds
     if r_index == seq.len() {
-        return vec![Err(DigestError::WalkedOutRight)];
+        return walk_end(kmer, DigestError::WalkedOutRight, dconf);
     }
 
     let new_base = seq[r_index];
 
     match new_base {
-        b' ' => return vec![Err(DigestError::EndOfSequence)],
+        b' ' => return walk_end(kmer, DigestError::EndOfSequence, dconf),
         b'-' => return walk_right(seq, l_index, r_index + 1, kmer, dconf),
-        b'N' | b'n' => return vec![Err(DigestError::ContainsN)],
+        b'N' | b'n' => return walk_end(kmer, DigestError::ContainsN, dconf),
         _ => (),
     }
 
@@ -696,33 +725,27 @@ pub fn walk_left(
     dconf: &DigestConfig,
 ) -> Vec<Result<Vec<u8>, DigestError>> {
     // Check tm
-    match dconf.thermo_type {
-        ThermoType::TM => {
-            if kmer.tm(&dconf.thal) >= dconf.primer_tm_min {
-                return vec![reached(kmer.seq, dconf)];
-            }
-        }
-        ThermoType::ANNEALING => {
-            if kmer.annealing(&dconf.thal, dconf.annealing_temp_c)
-                >= dconf.primer_annealing_prop.unwrap()
-            {
-                return vec![reached(kmer.seq, dconf)];
-            }
-        }
+    if reached_target(&kmer, dconf) {
+        return vec![reached(kmer.seq, dconf)];
     }
 
     // Check len
-    if kmer.seq.len() >= dconf.primer_len_max && !dconf.return_all {
-        return vec![Err(DigestError::ToLong)];
+    if kmer.seq.len() >= dconf.primer_len_max {
+        if in_window(&kmer, dconf) {
+            return vec![reached(kmer.seq, dconf)];
+        }
+        if !dconf.return_all {
+            return vec![Err(DigestError::ToLong)];
+        }
     }
 
     // Check if we've reached the end of the sequence
     if l_index > r_index || r_index - l_index >= dconf.max_walk {
-        return vec![Err(DigestError::MaxWalk)];
+        return walk_end(kmer, DigestError::MaxWalk, dconf);
     }
     // Check bounds
     if l_index == 0 {
-        return vec![Err(DigestError::WalkedOutLeft)];
+        return walk_end(kmer, DigestError::WalkedOutLeft, dconf);
     }
 
     let new_base = seq[l_index - 1];
@@ -730,8 +753,8 @@ pub fn walk_left(
     // If base is gap keep walking
     match new_base {
         b'-' => return walk_left(seq, l_index - 1, r_index, kmer, dconf),
-        b' ' => return vec![Err(DigestError::EndOfSequence)],
-        b'N' | b'n' => return vec![Err(DigestError::ContainsN)],
+        b' ' => return walk_end(kmer, DigestError::EndOfSequence, dconf),
+        b'N' | b'n' => return walk_end(kmer, DigestError::ContainsN, dconf),
         _ => (),
     }
 
@@ -1720,7 +1743,7 @@ mod tests {
 
         // Check sequence
         let exp_seq: Result<Vec<u8>, DigestError> =
-            Ok("TCTACAAGAGATCGAAAGTTGGTTGGT".as_bytes().to_vec());
+            Ok("ATCTACAAGAGATCGAAAGTTGGTTGGT".as_bytes().to_vec());
 
         // Check sequence
         for key in digested.keys() {
@@ -1756,9 +1779,11 @@ mod tests {
         // Match seq
         assert_eq!(
             rkmer.seqs(),
-            vec![std::str::from_utf8("ACCTTCTTGCACCACTTGGACATTA".as_bytes())
-                .unwrap()
-                .to_string()]
+            vec![
+                std::str::from_utf8("TTATACCTTCTTGCACCACTTGGACATTA".as_bytes())
+                    .unwrap()
+                    .to_string()
+            ]
         );
     }
 
@@ -1782,9 +1807,9 @@ mod tests {
         }
         // Check Sequence
         let expected = vec![
-            "GTTTGTTACCTGGGAAGGTATAAACCTTATAA".as_bytes().to_vec(),
-            "TGTTACCTGGGAAGGTATAAACCTTGTAA".as_bytes().to_vec(),
-            "TGTTACCTGGGAAGGTATAAACCTTCTAA".as_bytes().to_vec(),
+            "GGTTTGTTACCTGGGAAGGTATAAACCTTATAA".as_bytes().to_vec(),
+            "TTTGTTACCTGGGAAGGTATAAACCTTGTAA".as_bytes().to_vec(),
+            "TTTGTTACCTGGGAAGGTATAAACCTTCTAA".as_bytes().to_vec(),
         ];
         for e in expected.into_iter() {
             assert!(digested.contains_key(&Ok(e)),)
@@ -1809,10 +1834,10 @@ mod tests {
         }
         // Check Sequence
         let expected = vec![
-            "ACAAGAGATCGGTAAAGTTGGTTGGT".as_bytes().to_vec(),
-            "CAAGAGATCAGCAAAGTTGGTTGGT".as_bytes().to_vec(),
-            "AGAGATCGGCAAAGTTGGTTGGT".as_bytes().to_vec(),
-            "TCTACAAGAGATCAGTAAAGTTGGTTGGT".as_bytes().to_vec(),
+            "CTACAAGAGATCGGTAAAGTTGGTTGGT".as_bytes().to_vec(),
+            "ACAAGAGATCAGCAAAGTTGGTTGGT".as_bytes().to_vec(),
+            "AAGAGATCGGCAAAGTTGGTTGGT".as_bytes().to_vec(),
+            "ATCTACAAGAGATCAGTAAAGTTGGTTGGT".as_bytes().to_vec(),
         ];
         for e in expected.into_iter() {
             assert!(digested.contains_key(&Ok(e)),)
@@ -1833,6 +1858,44 @@ mod tests {
         let digested = digest_f_to_count(&seqs, 40, &dconf);
         let exp = "TTCCCAGGTAACAAACCAACCAAC".as_bytes().to_vec();
         assert_eq!(digested.get(&Err(DigestError::ToLongSeq(exp))), Some(&1.0));
+    }
+
+    #[test]
+    fn test_walk_targets_tm_midpoint() {
+        let seqs = vec!["ATTAAAGGTTTATACCTTCCCAGGTAACAAACCAACCAACTTTCGATCTCTTGTAGATCT".as_bytes()];
+        let dconf = DigestConfig::create_default();
+        let target = (dconf.primer_tm_min + dconf.primer_tm_max) / 2.0;
+        let first_in_window = b"TTCCCAGGTAACAAACCAACCAAC";
+        let digested = digest_f_to_count(&seqs, 40, &dconf);
+        let seq = digested.keys().next().unwrap().clone().unwrap();
+        assert_eq!(seq, b"CTTCCCAGGTAACAAACCAACCAAC");
+        assert!(tm::oligo_tm(first_in_window, &dconf.thal).unwrap() >= dconf.primer_tm_min);
+        let tm_dist = |s: &[u8]| (tm::oligo_tm(s, &dconf.thal).unwrap() - target).abs();
+        assert!(tm_dist(&seq) < tm_dist(first_in_window));
+    }
+
+    #[test]
+    fn test_walk_keeps_in_window_seq_at_primer_len_max() {
+        // The 24-mer is above primer_tm_min but below the midpoint
+        let seqs = vec!["ATTAAAGGTTTATACCTTCCCAGGTAACAAACCAACCAACTTTCGATCTCTTGTAGATCT".as_bytes()];
+        let exp = Ok(b"TTCCCAGGTAACAAACCAACCAAC".to_vec());
+        let mut dconf = DigestConfig::create_default();
+        dconf.primer_len_max = 24;
+        assert!(digest_f_to_count(&seqs, 40, &dconf).contains_key(&exp));
+
+        let annealing = tm::oligo_annealing(
+            b"TTCCCAGGTAACAAACCAACCAAC",
+            &dconf.thal,
+            dconf.annealing_temp_c,
+        )
+        .unwrap();
+        dconf.thermo_type = ThermoType::ANNEALING;
+        dconf.primer_annealing_prop = Some(annealing + 1.0);
+        dconf.annealing_diff = 2.0;
+        assert!(digest_f_to_count(&seqs, 40, &dconf).contains_key(&exp));
+        dconf.annealing_diff = 0.5;
+        let digested = digest_f_to_count(&seqs, 40, &dconf);
+        assert!(digested.contains_key(&Err(DigestError::ToLong)));
     }
 
     #[test]
@@ -1868,7 +1931,7 @@ mod tests {
 
         // Check sequence
         let exp_seq: Result<Vec<u8>, DigestError> =
-            Ok("TTCCCAGGTAACAAACCAACCAAC".as_bytes().to_vec());
+            Ok("CTTCCCAGGTAACAAACCAACCAAC".as_bytes().to_vec());
 
         assert!(digested.contains_key(&exp_seq));
         // Check count
@@ -1886,7 +1949,7 @@ mod tests {
         assert_eq!(digested.len(), 1);
 
         // Check sequence
-        let exp_seq = Ok("GTCCAATGGTGCAAAAGGTATAATCATTAAT".as_bytes().to_vec());
+        let exp_seq = Ok("ATGTCCAATGGTGCAAAAGGTATAATCATTAAT".as_bytes().to_vec());
 
         assert!(digested.contains_key(&exp_seq));
         // Check count
@@ -1919,11 +1982,11 @@ mod tests {
             assert_eq!(count, &(1.0 / 3.0), "Count: {}", count);
         }
         println!("{:?}", digested);
-        // Check sequences: each walks until its Tm reaches primer_tm_min
+        // Check sequences: each is the length with its Tm nearest the midpoint
         let expected = vec![
-            "CTTCCCAGGTAACAAACCAACCAAT".as_bytes().to_vec(),
-            "TTCCCAGGTAACAAACCAACCAAC".as_bytes().to_vec(),
-            "TTCCCAGGTAACAAACCAACCAAG".as_bytes().to_vec(),
+            "CCTTCCCAGGTAACAAACCAACCAAT".as_bytes().to_vec(),
+            "CTTCCCAGGTAACAAACCAACCAAC".as_bytes().to_vec(),
+            "CTTCCCAGGTAACAAACCAACCAAG".as_bytes().to_vec(),
         ];
         for e in expected.into_iter() {
             assert!(digested.contains_key(&Ok(e)),)
@@ -1959,11 +2022,11 @@ mod tests {
         // Check Sequence
         let expected = vec![
             "CCAACCTAGTTTCGATCTCTTGTAGATCT".as_bytes().to_vec(),
-            "ACCGAGTTTCGATCTCTTGTAGATCT".as_bytes().to_vec(),
-            "ACCAACCTAATTTCGATCTCTTGTAGATCT".as_bytes().to_vec(),
-            "CAACCGAATTTCGATCTCTTGTAGATCT".as_bytes().to_vec(),
-            "ACCCAGTTTCGATCTCTTGTAGATCT".as_bytes().to_vec(),
-            "CAACCCAATTTCGATCTCTTGTAGATCT".as_bytes().to_vec(),
+            "CAACCGAGTTTCGATCTCTTGTAGATCT".as_bytes().to_vec(),
+            "AACCAACCTAATTTCGATCTCTTGTAGATCT".as_bytes().to_vec(),
+            "CCAACCGAATTTCGATCTCTTGTAGATCT".as_bytes().to_vec(),
+            "CAACCCAGTTTCGATCTCTTGTAGATCT".as_bytes().to_vec(),
+            "CCAACCCAATTTCGATCTCTTGTAGATCT".as_bytes().to_vec(),
         ];
         for e in expected.into_iter() {
             assert!(digested.contains_key(&Ok(e)),)
