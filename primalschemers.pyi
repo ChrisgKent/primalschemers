@@ -48,6 +48,50 @@ class RKmer:
     def dimers(self) -> List[Tuple[int, int]]: ...
     def passed(self) -> bool: ...
 
+# (ref_id, contig_id, pos, strand): pos is the primer's 3' end base, strand "+" or "-"
+Hit = Tuple[int, int, int, str]
+
+class MisprimeDB:
+    def __init__(
+        self,
+        msa_paths: List[str],
+        background_paths: List[str],
+        kmer_size: int,
+        fuzzy: bool,
+        remap: bool,
+    ) -> None:
+        """ValueError if a file can't be read or kmer_size isn't 1-32."""
+    def screen(self, seqs: List[bytes]) -> int:
+        """Screen the primers' 3' terminal kmers in one pass over the
+        references. Returns how many weren't already cached."""
+    def hits(self, seqs: List[bytes]) -> List[List[Hit]]:
+        """Each primer's hits, screening any not yet cached first."""
+    @property
+    def kmer_size(self) -> int: ...
+    @property
+    def n_msas(self) -> int: ...
+    def ref_names(self) -> List[str]: ...
+    def contig_names(self, ref_id: int) -> List[str]: ...
+    def site_counts(self) -> List[int]: ...
+    def __len__(self) -> int: ...
+
+class PoolHits:
+    def __init__(self) -> None: ...
+    def add(self, hits: List[Hit]) -> None: ...
+    def remove(self, hits: List[Hit]) -> None:
+        """Remove one copy of each hit; absent hits are ignored."""
+    def forms_product(
+        self, hits: List[Hit], max_size: int, expected: List[Hit] = []
+    ) -> bool:
+        """Would the hits give a product shorter than max_size, with the
+        pool or among themselves? Two expected hits may pair."""
+    def find_product(
+        self, hits: List[Hit], max_size: int, expected: List[Hit] = []
+    ) -> Optional[Tuple[int, bool]]:
+        """The first such product, as (ref_id, alone): alone if the hits
+        form it among themselves rather than with the pool."""
+    def __len__(self) -> int: ...
+
 class Digester:
     def __init__(self, msa_path: str, ncores: int, remap: bool) -> None:
         """ValueError for an unreadable or empty MSA, or sequences of
