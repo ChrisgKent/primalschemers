@@ -378,7 +378,7 @@ checksum = "f84267b20a16ea918e43c6a88433c2d54fa145c92a811b5b047ccbe153674483"
 
 [[package]]
 name = "primalschemers"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "criterion",
  "flate2",
