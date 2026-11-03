@@ -13,6 +13,8 @@ indicatif = {version = "*", features = ["rayon"]}
 itertools = "0.14.0"
 pyo3 = "0.29"
 primer3-thal-rs = "0.2"
+flate2 = "1"
+rustc-hash = "2"
 
 [dev-dependencies]
 criterion = "0.5"

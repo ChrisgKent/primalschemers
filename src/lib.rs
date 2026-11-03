@@ -10,6 +10,7 @@ pub mod config;
 pub mod digest;
 pub mod kmer;
 pub mod mapping;
+pub mod mispriming;
 pub mod primaldimer;
 pub mod seqfuncs;
 pub mod seqio;
@@ -437,6 +438,8 @@ fn primalschemers(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<kmer::RKmer>()?;
     m.add_class::<Digester>()?;
     m.add_class::<thal::PyThermoResult>()?;
+    m.add_class::<mispriming::MisprimeDB>()?;
+    m.add_class::<mispriming::PoolHits>()?;
 
     // Functions
     m.add_function(wrap_pyfunction!(digest_seq, m)?)?;
